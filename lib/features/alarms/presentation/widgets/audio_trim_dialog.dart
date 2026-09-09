@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:sunhabit/core/constants/app_constants.dart';
+import 'package:sunhabit/core/services/audio_extractor_service.dart';
 import 'package:sunhabit/core/services/audio_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 
@@ -50,6 +51,7 @@ class _AudioTrimDialogState extends State<AudioTrimDialog> {
   late int _durationSeconds;
   final AudioService _audio = AudioService();
   bool _isLoading = false;
+  String? _loadError;
 
   static const List<int> _presetDurations = [15, 30, 45, 60];
   /// Máximo por defecto para el slider cuando la duración real del archivo
@@ -81,15 +83,37 @@ class _AudioTrimDialogState extends State<AudioTrimDialog> {
   }
 
   Future<void> _loadAudio() async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
     try {
       await _audio.loadFile(widget.soundPath);
-    } catch (_) {
-      // Si falla la carga, el preview simplemente no reproducirá.
-    }
-    if (mounted) {
+      final duration = _audio.mediaDurationSeconds;
+      if (duration <= 0) {
+        // Algunos archivos pueden reportar duración 0 pese a ser válidos;
+        // probamos con FFmpegKit como segunda línea de validación.
+        final ffmpegDuration = await AudioExtractorService.probeDurationSeconds(
+          widget.soundPath,
+        );
+        if ((ffmpegDuration ?? 0) > 0) {
+          setState(() => _isLoading = false);
+          return;
+        }
+        setState(() {
+          _loadError = 'No se pudo leer la duración del audio. '
+              'El archivo podría estar corrupto o ser incompatible.';
+          _isLoading = false;
+        });
+        return;
+      }
       _clampToMediaDuration();
       setState(() => _isLoading = false);
+    } catch (e) {
+      setState(() {
+        _loadError = 'Error al cargar el audio: $e';
+        _isLoading = false;
+      });
     }
   }
 
@@ -127,7 +151,15 @@ class _AudioTrimDialogState extends State<AudioTrimDialog> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
-  String get _fileName => widget.soundPath.split(RegExp(r'[/\\]')).last;
+  String get _fileName {
+    final parts = widget.soundPath.split(RegExp(r'[/\\]'));
+    final name = parts.isEmpty ? widget.soundPath : parts.last;
+    // Elimina los sufijos internos de SunHabit para mostrar un nombre limpio.
+    final cleaned = name
+        .replaceAll(RegExp(r'_(extracted|trimmed)_\d{13,}(?=\.)'), '')
+        .replaceAll(RegExp(r'_\d{13,}(?=\.)'), '');
+    return cleaned;
+  }
 
   void _togglePreview() {
     if (_audio.isPlaying) {
@@ -189,7 +221,7 @@ class _AudioTrimDialogState extends State<AudioTrimDialog> {
     final media = _audio.mediaDurationSeconds;
     final maxStart = _maxStartSeconds;
     final availablePresets = _availablePresets;
-    final isValid = _isConfigurationValid;
+    final isValid = _loadError == null && _isConfigurationValid;
 
     return Dialog(
       backgroundColor: AppColors.surfaceElevated,
@@ -232,24 +264,53 @@ class _AudioTrimDialogState extends State<AudioTrimDialog> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        Text(
-                          _fileName,
-                          style: textTheme.bodySmall?.copyWith(
-                            color: AppColors.textSecondary,
+                        Tooltip(
+                          message: _fileName,
+                          child: Text(
+                            _fileName,
+                            style: textTheme.bodySmall?.copyWith(
+                              color: AppColors.textSecondary,
+                            ),
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          softWrap: false,
-                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
                   ),
                 ],
               ),
+              if (_loadError != null) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.danger.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(AppConstants.cardRadius),
+                    border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.error_outline, color: AppColors.danger, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _loadError!,
+                          style: textTheme.bodySmall?.copyWith(
+                            color: AppColors.danger,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 20),
               // Segment timeline visualizer
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: AppColors.surfaceHighest,
                   borderRadius: BorderRadius.circular(AppConstants.cardRadius),
@@ -259,60 +320,96 @@ class _AudioTrimDialogState extends State<AudioTrimDialog> {
                   children: [
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Punto de inicio',
-                              style: textTheme.bodySmall?.copyWith(
-                                color: AppColors.textMuted,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'Punto de inicio',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: AppColors.textMuted,
+                                    fontSize: 10,
+                                  ),
+                                  maxLines: 1,
+                                  softWrap: false,
+                                ),
                               ),
-                            ),
-                            Text(
-                              _formatTime(_startSeconds),
-                              style: textTheme.titleLarge?.copyWith(
-                                color: AppColors.neonGreen,
-                                fontWeight: FontWeight.bold,
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  _formatTime(_startSeconds),
+                                  style: textTheme.titleLarge?.copyWith(
+                                    color: AppColors.neonGreen,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 18,
+                                  ),
+                                  maxLines: 1,
+                                  softWrap: false,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                         Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 8),
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
+                            horizontal: 8,
+                            vertical: 3,
                           ),
                           decoration: BoxDecoration(
                             color: AppColors.surfaceElevated,
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(10),
                             border: Border.all(color: AppColors.borderDark),
                           ),
                           child: Text(
-                            'Duración: ${_durationSeconds}s',
+                            '${_durationSeconds}s',
                             style: textTheme.bodySmall?.copyWith(
                               color: AppColors.textPrimary,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              'Punto final',
-                              style: textTheme.bodySmall?.copyWith(
-                                color: AppColors.textMuted,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  'Punto final',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: AppColors.textMuted,
+                                    fontSize: 10,
+                                  ),
+                                  maxLines: 1,
+                                  softWrap: false,
+                                ),
                               ),
-                            ),
-                            Text(
-                              _formatTime(endSeconds),
-                              style: textTheme.titleLarge?.copyWith(
-                                color: AppColors.textSecondary,
-                                fontWeight: FontWeight.bold,
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  _formatTime(endSeconds),
+                                  style: textTheme.titleLarge?.copyWith(
+                                    color: AppColors.textSecondary,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 18,
+                                  ),
+                                  maxLines: 1,
+                                  softWrap: false,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -516,9 +613,11 @@ class _AudioTrimDialogState extends State<AudioTrimDialog> {
                         ),
                       ),
                       child: Text(
-                        isValid
-                            ? 'Guardar fragmento'
-                            : 'Fragmento fuera de rango',
+                        _loadError != null
+                            ? 'Audio no válido'
+                            : isValid
+                                ? 'Guardar fragmento'
+                                : 'Fragmento fuera de rango',
                         style:
                             const TextStyle(fontWeight: FontWeight.bold),
                       ),

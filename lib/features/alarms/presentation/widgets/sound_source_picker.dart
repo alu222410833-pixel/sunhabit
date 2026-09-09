@@ -6,9 +6,10 @@ import 'package:sunhabit/core/theme/app_colors.dart';
 /// Helper reutilizable para elegir la fuente del sonido de una alarma.
 ///
 /// Muestra un bottom sheet con dos opciones:
-/// - **Archivo de audio**: el usuario elige un audio y se usa tal cual.
+/// - **Archivo de audio**: el usuario elige un audio y se copia al
+///   directorio persistente de la app para evitar que el sistema lo borre.
 /// - **Extraer audio de un video**: el usuario elige un video y se extrae su
-///   pista de audio con [AudioExtractorService] (FFmpegKit) a un `.m4a`
+///   pista de audio con [AudioExtractorService] (FFmpegKit) a un `.mp3`
 ///   persistente.
 ///
 /// En ambos casos devuelve la ruta de un archivo de audio válido (ya extraído
@@ -48,7 +49,7 @@ class SoundSourcePicker {
                 ),
                 title: const Text('Archivo de audio'),
                 subtitle: const Text(
-                  'Elige un archivo de sonido existente',
+                  'Elige un archivo de sonido existente (se copiará a la app)',
                 ),
                 onTap: () => Navigator.pop(context, _SoundSource.audio),
               ),
@@ -84,7 +85,13 @@ class SoundSourcePicker {
   static Future<String?> _pickAudio() async {
     final result = await FilePicker.pickFiles(type: FileType.audio);
     if (result.isEmpty) return null;
-    return result.single.path;
+    final pickedPath = result.single.path;
+    if (pickedPath == null || pickedPath.isEmpty) return null;
+
+    // Si ya es un archivo persistente dentro de la app, úsalo directamente.
+    final copied = await AudioExtractorService()
+        .copyAudioToPersistentStorage(pickedPath);
+    return copied ?? pickedPath;
   }
 
   static Future<String?> _pickVideoAndExtract(BuildContext context) async {

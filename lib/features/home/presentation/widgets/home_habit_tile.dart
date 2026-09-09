@@ -12,11 +12,13 @@ import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart
 /// Tanto la fila completa como el indicador responden al mismo [onTap].
 class HomeHabitTile extends StatelessWidget {
   final Habit habit;
+  final DateTime? selectedDate;
   final VoidCallback? onTap;
 
   const HomeHabitTile({
     super.key,
     required this.habit,
+    this.selectedDate,
     this.onTap,
   });
 
@@ -28,11 +30,13 @@ class HomeHabitTile extends StatelessWidget {
     final iconColor = habit.iconColor ?? AppColors.neonGreen;
     final imagePath = habit.effectiveImagePath;
 
-    final subtitleParts = <String>[
-      if (habit.progressText != null) habit.progressText!,
-      if (habit.earliestReminderMinutes != null)
-        '${(habit.earliestReminderMinutes! ~/ 60).toString().padLeft(2, '0')}:${(habit.earliestReminderMinutes! % 60).toString().padLeft(2, '0')}',
-    ];
+    final date = selectedDate ?? DateTime.now();
+    final reminderText = habit.reminderTimeTextForDate(date);
+
+    final subtitleParts = [
+      habit.progressText,
+      reminderText,
+    ].whereType<String>().toList();
     final subtitle = subtitleParts.isEmpty ? null : subtitleParts.join(' · ');
 
     return AnimatedContainer(

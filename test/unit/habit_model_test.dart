@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -149,31 +151,62 @@ void main() {
   });
 
   group('Category & Sound Inheritance', () {
-    test('resolves reminder specific sound when present', () {
+    late Directory tempDir;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('sunhabit_sound_test_');
+      HabitsRepository.resetInstance();
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+    });
+
+    String createTempSound(String name) {
+      final file = File('${tempDir.path}/$name');
+      file.writeAsBytesSync(List<int>.filled(1024, 0));
+      return file.path;
+    }
+
+    test('resolves reminder specific sound when present and file exists', () {
+      final soundPath = createTempSound('reminder.mp3');
       final habit = Habit(id: 'h1', title: 'H1', categoryId: 'health');
-      const reminder = Reminder(
+      final reminder = Reminder(
         hour: 8,
         minute: 0,
         type: 'Alarma',
-        soundPath: '/custom/path.mp3',
+        soundPath: soundPath,
       );
       final effective = HabitsRepository().getEffectiveSound(habit, reminder);
-      expect(effective, '/custom/path.mp3');
+      expect(effective, soundPath);
     });
 
-    test('falls back to category default sound when reminder has no sound', () {
+    test('falls back to category default sound when reminder has no sound and file exists', () {
+      final soundPath = createTempSound('cat.mp3');
       final cat = Category(
         id: 'cat_with_sound',
         name: 'Sound Cat',
         color: Colors.blue,
-        defaultSoundPath: '/cat/sound.mp3',
+        defaultSoundPath: soundPath,
       );
       HabitsRepository().addCategory(cat);
 
       final habit = Habit(id: 'h2', title: 'H2', categoryId: 'cat_with_sound');
       const reminder = Reminder(hour: 9, minute: 0, type: 'Alarma');
       final effective = HabitsRepository().getEffectiveSound(habit, reminder);
-      expect(effective, '/cat/sound.mp3');
+      expect(effective, soundPath);
+    });
+
+    test('falls back to null when reminder sound file does not exist', () {
+      final habit = Habit(id: 'h1', title: 'H1', categoryId: 'health');
+      final reminder = Reminder(
+        hour: 8,
+        minute: 0,
+        type: 'Alarma',
+        soundPath: '${tempDir.path}/missing.mp3',
+      );
+      final effective = HabitsRepository().getEffectiveSound(habit, reminder);
+      expect(effective, isNull);
     });
 
     test('returns null when neither reminder nor category have sound', () {

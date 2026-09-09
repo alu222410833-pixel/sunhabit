@@ -264,4 +264,248 @@ encoders externos) si los formatos de entrada lo permiten.
   `_pickDefaultSound` ahora usa `SoundSourcePicker`.
 - `android/app/build.gradle.kts` - `minSdk = 24`.
 
+---
+
+## Persistencia de Categorías y Backup (2026-09-09)
+
+### Problema
+Al guardar un backup o inicializar la app, solo se persistían los hábitos y logs,
+mientras que las categorías dependían de una lista global mutable en memoria
+(`defaultCategories`), por lo que no se guardaban en `SharedPreferences` ni se
+restauraban categorías personalizadas creadas por el usuario.
+
+### Solución
+1. En `HabitsRepository`, se integró `_categories` como lista de instancia privada.
+2. Al inicializar (`initialize()`) o recargar (`_load()`), si el almacenamiento no
+   tiene categorías guardadas, se cargan las categorías por defecto y se persisten
+   inmediatamente con `_save()`.
+3. Los métodos `addCategory()`, `updateCategory()` y `deleteCategory()` ahora operan
+   directamente sobre `_categories` y guardan los cambios de forma asíncrona.
+4. `BackupService` ahora exporta e importa las categorías persistidas de forma completa.
+
+---
+
+## Visualización y Ordenamiento de Recordatorios por Día de la Semana (2026-09-09)
+
+### Problema
+En la pantalla de inicio, los hábitos con recordatorios configurados para días específicos
+(ej. recordatorio a las 05:50 solo los viernes) mostraban esa hora y se ordenaban según
+ella incluso en días no programados (ej. miércoles), mostrando horas discordantes.
+
+### Solución
+1. Se añadieron los métodos `earliestReminderMinutesForDate(DateTime date)` y
+   `reminderTimeTextForDate(DateTime date)` en `Habit`, los cuales filtran los
+   recordatorios que realmente aplican según el día de la semana (`reminder.weekDays`).
+2. `HabitsRepository.getHabitsForDate(date)` ahora ordena los hábitos usando la hora
+   específica de esa fecha seleccionada.
+3. `HomeHabitTile` recibe `selectedDate` y solo muestra la hora del recordatorio si el
+   hábito tiene un recordatorio configurado para ese día específico.
+
+---
+
+## Rediseño del Editor de Hábitos y Editor de Recordatorios (2026-09-09)
+
+### Problema
+1. Al editar un hábito y cambiar su tipo de objetivo (ej. de Cantidad a Sí/No o Cronómetro)
+   o su frecuencia, los cambios no se guardaban porque `Habit.copyWith` preservaba los
+   valores antiguos no nulos cuando se pasaba `null`.
+2. La pantalla de edición mostraba campos no pertinentes mezclados (ej. meta numérica
+   en hábitos Sí/No).
+3. El editor de recordatorios en edición solo permitía cambiar la hora, sin mostrar ni
+   permitir seleccionar días de la semana activos (`L M X J V S D`) ni elegir sonido.
+
+### Solución
+1. En `EditHabitScreen._save()`, se reemplazó `copyWith` por la instanciación explícita
+   de `Habit`, limpiando de forma segura los campos del tipo de evaluación o frecuencia anterior.
+2. La UI de `EditHabitScreen` ahora es dinámica y solo muestra las tarjetas de configuración
+   pertinentes al `_evaluationType` seleccionado.
+3. Se rediseñó `showRemindersEditor` integrando para cada recordatorio: selector de hora,
+   selector de tipo (Notificación/Alarma), selector de sonido con recorte (`SoundPickerTile`)
+   y selector de días de la semana (`L M X J V S D`).
+
+---
+
+## 4 Mejoras Avanzadas en Notificaciones y Alarmas (2026-09-09)
+
+1. **Interactividad con RemoteInput**: En hábitos de cantidad, la notificación ahora incluye
+   la acción `✍ Escribir`, permitiendo ingresar un valor numérico directamente desde la
+   barra de notificaciones (vía `AndroidNotificationActionInput`).
+2. **Volumen Progresivo (Fade-In)**: En `AlarmService`, las alarmas nativas se configuran con
+   `VolumeSettings.fade(volume: 1.0, fadeDuration: Duration(seconds: 15))`, aumentando
+   el volumen gradualmente en 15 segundos para evitar despertares bruscos.
+3. **LargeIcon con Imagen/Icono**: `NotificationService` adjunta `FilePathAndroidBitmap`
+   cuando el hábito tiene una imagen o categoría asignada, mostrándola en grande en la notificación.
+4. **Asistente de Optimización de Batería y Permisos**: En `SettingsScreen`, se añadió una
+   tarjeta interactiva que comprueba el estado de optimización de batería y permisos de alarmas
+   exactas, junto con un diálogo de guía paso a paso para fabricantes como Honor/Huawei,
+   Xiaomi/Redmi/POCO y Samsung.
+
+---
+
+## Refuerzo de Hábitos y Categorías (2026-09-09)
+
+### Problema
+1. Eliminar una categoría con hábitos asociados dejaba hábitos huérfanos (con
+   `categoryId` apuntando a una categoría inexistente), rompiendo la UI y el
+   creador de hábitos.
+2. Cambiar o eliminar la imagen/sonido de un hábito o categoría acumulaba
+   archivos huérfanos en el directorio de documentos de la app, consumiendo
+   espacio en el dispositivo sin limpieza.
+3. Con muchos hábitos, no había forma de filtrar la lista por categoría.
+
+### Solución
+1. **Eliminación segura de categorías**:
+   - `HabitsRepository.deleteCategory` ahora devuelve `CategoryDeletionResult`
+     (`success`, `blockedLastCategory`, `notFound`).
+   - Nunca permite eliminar la última categoría restante.
+   - Reasigna los hábitos huérfanos a una categoría fallback (elegida por el
+     usuario o la primera restante) antes de eliminar.
+   - `CategoriesMenuScreen` muestra un diálogo de confirmación con conteo de
+     hábitos afectados y un selector de categoría destino, y reprograma los
+     recordatorios de los hábitos reasignados.
+2. **Limpieza automática de medios huérfanos**:
+   - Nuevo `MediaCleanupService` (`lib/core/services/media_cleanup_service.dart`)
+     que borra de disco los archivos de imagen/audio que ya no están
+     referenciados por ningún hábito, categoría o recordatorio.
+   - Solo borra archivos dentro del directorio de documentos de la app
+     (donde `ImagePickerService` y `AudioExtractorService` los guardan).
+   - Se invoca desde `HabitsRepository.updateHabit`, `deleteHabit`,
+     `updateCategory` y `deleteCategory` comparando los medios del estado
+     anterior vs. el nuevo.
+3. **Filtro por categorías en la lista de hábitos**:
+   - `HabitsScreen` ahora muestra una fila horizontal de chips (`Todos` + cada
+     categoría) que filtra la lista de hábitos mostrada y el progreso calculado.
+
+### Archivos relevantes
+- `lib/features/habits/data/habits_repository.dart` - `deleteCategory` seguro,
+  helpers `_cleanupHabitMediaDiff` / `_cleanupCategoryMediaDiff`.
+- `lib/core/services/media_cleanup_service.dart` - Servicio de limpieza.
+- `lib/features/categories/presentation/categories_menu_sheet.dart` - UI de
+  borrado con confirmación y reasignación.
+- `lib/features/habits/presentation/habits_screen.dart` - Chips de filtro.
+- `test/features/habits/data/habits_repository_category_test.dart` - Tests
+  de eliminación segura y reasignación.
+
+---
+
+## Audio extraído y reproducido en alarmas (2026-09-09)
+
+### Problema
+1. El audio extraído de videos a veces no sonaba en las alarmas, o el diálogo
+   de recorte mostraba nombres de archivo largos y feos.
+2. Los archivos de audio elegidos directamente por el usuario (`FilePicker`)
+   quedaban en rutas temporales/caché que Android podía borrar, dejando la
+   alarma sin sonido días después.
+3. `AudioExtractorService` no validaba que el archivo generado fuera realmente
+   un audio reproducible, ni limpiaba archivos parciales en caso de fallo.
+4. `HabitsRepository.getEffectiveSound` devolvía rutas de sonido aunque el
+   archivo ya no existiera, haciendo que `alarm` intentara reproducir un
+   archivo inexistente y fallara silenciosamente.
+
+### Solución
+1. **Extracción robusta con FFmpegKit**:
+   - `AudioExtractorService.extractAudio()` re-encodea a MP3 con LAME a
+     192 kbps, estéreo, 44.1 kHz (`-c:a libmp3lame -b:a 192k -ac 2 -ar 44100`).
+   - Fallback a AAC `.m4a` si LAME falla.
+   - Validación post-proceso: el archivo existe, tiene contenido y FFmpeg
+     reporta `Duration:` (lo que garantiza que `MediaPlayer` pueda leerlo).
+   - Limpieza automática de archivos parciales si la extracción o el recorte
+     fallan.
+2. **Recorte fiable**:
+   - `AudioExtractorService.trimAudio()` usa `-ss` antes del input y `-t`
+     después del input, evitando recortes con duración errónea.
+   - Si el recorte falla, devuelve el audio original en lugar de un archivo
+     corrupto o nulo.
+3. **Audios elegidos se copian a almacenamiento persistente**:
+   - `SoundSourcePicker._pickAudio()` ahora copia el archivo elegido a
+     `getApplicationDocumentsDirectory()/extracted_audio/` para que no desaparezca
+     si el sistema limpia la caché o el picker borra el archivo temporal.
+4. **Validación de rutas en `getEffectiveSound`**:
+   - Antes de devolver una ruta de sonido, se verifica `File.existsSync()` y
+     `lengthSync() > 0`. Si el archivo no existe, se usa el sonido por defecto
+     de la categoría o el del sistema.
+5. **Mejoras en `AudioTrimDialog`**:
+   - El nombre de archivo mostrado limpia los sufijos internos
+     (`_extracted_<timestamp>`, `_trimmed_<timestamp>`) para que sea legible.
+   - `Tooltip` con el nombre completo al mantener presionado.
+   - Si `just_audio` o FFmpeg no pueden leer el audio, se muestra un mensaje
+     de error en lugar de permitir guardar un archivo inválido.
+
+### Archivos relevantes
+- `lib/core/services/audio_extractor_service.dart` - Extracción/recorte con
+  validación FFmpeg.
+- `lib/features/alarms/presentation/widgets/sound_source_picker.dart` - Copia
+  de audios elegidos a almacenamiento persistente.
+- `lib/features/alarms/presentation/widgets/audio_trim_dialog.dart` - UI de
+  recorte con validación y nombre limpio.
+- `lib/features/habits/data/habits_repository.dart` - `getEffectiveSound`
+  valida existencia del archivo.
+
+### Nota importante
+- El paquete `alarm` en Android acepta rutas locales absolutas dentro del
+  directorio de documentos de la app. Las rutas generadas por
+  `AudioExtractorService` (p. ej. `/data/user/0/<paquete>/app_flutter/extracted_audio/...`)
+  son rutas absolutas y deberían funcionar con `MediaPlayer` nativo.
+- Si en iOS el audio personalizado siguiera sin funcionar, la causa es que el
+  paquete `alarm` prefiere rutas relativas al directorio de documentos o
+  archivos empaquetados como assets; en ese caso habría que convertir la ruta
+  absoluta a relativa (`extracted_audio/nombre.mp3`) antes de pasarla a
+  `AlarmService`.
+
+---
+
+## Editor de recordatorios: no se podían eliminar recordatorios (2026-09-09)
+
+### Problema
+En la pantalla de edición de hábitos, tocar la `X` de un recordatorio no lo
+eliminaba. El bottom sheet seguía mostrando el mismo número de recordatorios.
+
+### Causa
+`showRemindersEditor` usaba `StatefulBuilder` pero operaba sobre la lista
+original recibida del padre. Al eliminar/editar, se notificaba al padre con
+`onRemindersChanged`, pero la UI del propio bottom sheet no se reconstruía con
+la nueva lista porque `StatefulBuilder` no mantenía un estado local mutable.
+Además, el área táctil del icono de cierre era muy pequeña (20×20).
+
+### Solución
+1. `showRemindersEditor` crea ahora una **copia local mutable** (`localReminders`)
+   al abrirse. `addReminder`, `removeReminder`, `updateReminder` y
+   `toggleReminderDay` actúan sobre esa lista local.
+2. Cada cambio notifica al padre vía `onRemindersChanged(List.from(localReminders))`
+   y reconstruye el bottom sheet con `setModalState`.
+3. Se amplió el área táctil de la `X` de eliminación a un `Container` con padding
+   de 8px y fondo `surfaceDark`, facilitando el toque.
+
+### Archivos relevantes
+- `lib/features/habits/presentation/edit_habit/pickers/reminders_editor.dart`
+
+---
+
+## AudioTrimDialog: recorte visual del punto final (2026-09-09)
+
+### Problema
+En el diálogo de recorte de audio, el texto "Punto final" (y el tiempo debajo)
+se cortaba por el borde derecho del diálogo, especialmente en pantallas pequeñas
+o con fuentes grandes.
+
+### Causa
+El `Row` que muestra inicio, duración y final usaba
+`mainAxisAlignment: MainAxisAlignment.spaceBetween` sin `Expanded` ni
+`TextOverflow` en las columnas laterales. Cuando el ancho disponible era
+insuficiente, el `Row` desbordaba y cortaba la columna derecha.
+
+### Solución
+1. Las columnas de "Punto de inicio" y "Punto final" se envolvieron en
+   `Expanded` para compartir el espacio disponible.
+2. Cada texto (labels y tiempos) se envolvió en `FittedBox(fit: BoxFit.scaleDown)`
+   para que se escale hacia abajo si no cupiera en el ancho asignado, evitando
+   cualquier corte por overflow.
+3. Se redujo el tamaño de fuente de los labels (`fontSize: 10`) y de los
+   tiempos (`fontSize: 18`).
+4. El contenedor central cambió de "Duración: 30s" a "30s" y se hizo más
+   compacto (padding reducido) para dejar más espacio a los laterales.
+5. Se redujo el padding interno del recuadro de 16 a 12 px.
+
+### Archivos relevantes
+- `lib/features/alarms/presentation/widgets/audio_trim_dialog.dart`
 

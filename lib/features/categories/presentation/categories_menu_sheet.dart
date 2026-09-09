@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/core/theme/app_decorations.dart';
 import 'package:sunhabit/features/categories/data/category_model.dart';
@@ -43,6 +44,147 @@ class _CategoriesMenuScreenState extends State<CategoriesMenuScreen> {
     if (updated == null) return;
     widget.repository.updateCategory(updated);
     if (mounted) setState(() {});
+  }
+
+  Future<void> _deleteCategory(Category category) async {
+    final affectedHabits =
+        _habits.where((h) => h.categoryId == category.id).toList();
+    final isLast = _categories.length <= 1;
+
+    final confirmed = await _showDeleteConfirmation(
+      category: category,
+      affectedHabits: affectedHabits,
+      isLastCategory: isLast,
+    );
+    if (confirmed == null || !confirmed || !mounted) return;
+
+    final fallbackId = await _pickFallbackCategory(excludeId: category.id);
+    if (fallbackId == null) return; // El usuario canceló la reasignación.
+
+    final result = await widget.repository.deleteCategory(
+      category.id,
+      fallbackCategoryId: fallbackId,
+    );
+
+    if (!mounted) return;
+
+    switch (result) {
+      case CategoryDeletionResult.success:
+        // Reprogramar los hábitos reasignados para que hereden el sonido de la
+        // nueva categoría, si aplica.
+        for (final habit in affectedHabits) {
+          final reassigned = widget.repository.getHabitById(habit.id);
+          if (reassigned != null) {
+            await ReminderService.instance.cancelHabit(reassigned);
+            await ReminderService.instance.scheduleHabit(reassigned);
+          }
+        }
+        setState(() {});
+      case CategoryDeletionResult.blockedLastCategory:
+        _showSnack('No se puede eliminar la última categoría restante.');
+      case CategoryDeletionResult.notFound:
+        _showSnack('La categoría ya no existe.');
+    }
+  }
+
+  /// Diálogo de confirmación de borrado. Devuelve `true` si el usuario
+  /// confirma, `false` si cancela explícitamente, o `null` si la operación
+  /// no puede continuar (última categoría).
+  Future<bool?> _showDeleteConfirmation({
+    required Category category,
+    required List<Habit> affectedHabits,
+    required bool isLastCategory,
+  }) {
+    if (isLastCategory) {
+      _showSnack('No se puede eliminar la última categoría restante.');
+      return Future.value(null);
+    }
+
+    final hasHabits = affectedHabits.isNotEmpty;
+    final message = hasHabits
+        ? 'La categoría "${category.name}" tiene ${affectedHabits.length} '
+            '${affectedHabits.length == 1 ? 'hábito asociado' : 'hábitos asociados'}. '
+            'Se reasignarán a otra categoría. ¿Continuar?'
+        : '¿Seguro que quieres eliminar la categoría "${category.name}"? '
+            'Esta acción no se puede deshacer.';
+
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar categoría'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Eliminar',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Permite al usuario elegir a qué categoría reasignar los hábitos.
+  /// Si solo hay una candidata, se selecciona automáticamente.
+  Future<String?> _pickFallbackCategory({required String excludeId}) {
+    final candidates =
+        _categories.where((c) => c.id != excludeId).toList();
+    if (candidates.isEmpty) return Future.value(null);
+    if (candidates.length == 1) {
+      return Future.value(candidates.first.id);
+    }
+
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reasignar hábitos'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const Text(
+                'Selecciona la categoría a la que se moverán los hábitos:',
+              ),
+              const SizedBox(height: 8),
+              ...candidates.map(
+                (c) => ListTile(
+                  leading: Icon(
+                    c.icon ?? Icons.category_outlined,
+                    color: c.iconColor ?? c.color,
+                  ),
+                  title: Text(c.name),
+                  onTap: () => Navigator.pop(context, c.id),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('Cancelar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppColors.surfaceHighest,
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   @override
@@ -100,6 +242,7 @@ class _CategoriesMenuScreenState extends State<CategoriesMenuScreen> {
                     category: category,
                     habitCount: count,
                     onTap: () => _editCategory(category),
+                    onDelete: () => _deleteCategory(category),
                   ),
                 );
               }),
@@ -125,11 +268,13 @@ class _CategoryListTile extends StatelessWidget {
   final Category category;
   final int habitCount;
   final VoidCallback? onTap;
+  final VoidCallback? onDelete;
 
   const _CategoryListTile({
     required this.category,
     required this.habitCount,
     this.onTap,
+    this.onDelete,
   });
 
   Future<void> _showEnlargedPreview(BuildContext context) {
@@ -260,9 +405,24 @@ class _CategoryListTile extends StatelessWidget {
             color: AppColors.textSecondary,
           ),
         ),
-        trailing: const Icon(
-          Icons.chevron_right_rounded,
-          color: AppColors.textSecondary,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (onDelete != null)
+              IconButton(
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: AppColors.danger,
+                  size: 22,
+                ),
+                tooltip: 'Eliminar categoría',
+                onPressed: onDelete,
+              ),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.textSecondary,
+            ),
+          ],
         ),
       ),
     );

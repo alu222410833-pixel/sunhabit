@@ -76,7 +76,10 @@ class AlarmService {
         vibrate: true,
         androidFullScreenIntent: true,
         payload: payload,
-        volumeSettings: const VolumeSettings.fixed(volume: 1.0),
+        volumeSettings: VolumeSettings.fade(
+          volume: 1.0,
+          fadeDuration: const Duration(seconds: 15),
+        ),
         notificationSettings: NotificationSettings(
           title: '¡Es hora de ${habit.title}!',
           body: 'Tu hábito te está esperando · $timeText',

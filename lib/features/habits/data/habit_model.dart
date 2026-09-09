@@ -178,12 +178,20 @@ class Habit {
     return HabitEvaluationType.yesNo;
   }
 
-  /// Devuelve los minutos desde medianoche (0..1439) del recordatorio más temprano,
-  /// o null si no tiene recordatorios configurados.
-  int? get earliestReminderMinutes {
+  /// Devuelve los minutos desde medianoche (0..1439) del recordatorio más temprano
+  /// que aplique para [date], o null si no tiene recordatorios para ese día.
+  int? earliestReminderMinutesForDate(DateTime date) {
     if (reminders.isEmpty) return null;
+    final weekdayIndex = date.weekday - 1;
     int? earliest;
     for (final reminder in reminders) {
+      if (reminder.weekDays != null && reminder.weekDays!.isNotEmpty) {
+        if (weekdayIndex < 0 ||
+            weekdayIndex >= reminder.weekDays!.length ||
+            !reminder.weekDays![weekdayIndex]) {
+          continue;
+        }
+      }
       final totalMinutes = reminder.hour * 60 + reminder.minute;
       if (earliest == null || totalMinutes < earliest) {
         earliest = totalMinutes;
@@ -191,6 +199,21 @@ class Habit {
     }
     return earliest;
   }
+
+  /// Devuelve la hora formateada (ej. "14:11") del recordatorio más temprano
+  /// para [date], o null si no tiene recordatorios para ese día.
+  String? reminderTimeTextForDate(DateTime date) {
+    final minutes = earliestReminderMinutesForDate(date);
+    if (minutes == null) return null;
+    final h = (minutes ~/ 60).toString().padLeft(2, '0');
+    final m = (minutes % 60).toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  /// Devuelve los minutos desde medianoche (0..1439) del recordatorio más temprano para hoy,
+  /// o null si no tiene recordatorios configurados.
+  int? get earliestReminderMinutes =>
+      earliestReminderMinutesForDate(DateTime.now());
 
   /// Devuelve un texto legible con el progreso del hábito.
   /// - Sí/No → "Sí" o "No"

@@ -23,8 +23,14 @@ class HabitsScreen extends StatefulWidget {
 class _HabitsScreenState extends State<HabitsScreen> {
   final HabitsRepository _repository = HabitsRepository();
   int _selectedPeriod = 0;
+  /// Id de la categoría seleccionada para filtrar. `null` = todas.
+  String? _selectedCategoryId;
 
-  List<Habit> get _habits => _repository.getHabits();
+  List<Habit> get _allHabits => _repository.getHabits();
+
+  List<Habit> get _habits => _selectedCategoryId == null
+      ? _allHabits
+      : _allHabits.where((h) => h.categoryId == _selectedCategoryId).toList();
 
   List<bool> _weekFor(Habit habit) {
     final logs = _repository.getHabitLogs(habit.id);
@@ -296,6 +302,14 @@ class _HabitsScreenState extends State<HabitsScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
+                  _CategoryFilterChips(
+                    categories: _repository.getCategories(),
+                    selectedId: _selectedCategoryId,
+                    onSelected: (id) {
+                      setState(() => _selectedCategoryId = id);
+                    },
+                  ),
+                  const SizedBox(height: 24),
                   Text(
                     'MIS HÁBITOS',
                     style: textTheme.labelMedium?.copyWith(
@@ -426,6 +440,103 @@ class _PeriodSelector extends StatelessWidget {
             ),
           );
         }),
+      ),
+    );
+  }
+}
+
+/// Fila de chips horizontales para filtrar hábitos por categoría.
+///
+/// El primer chip ("Todos") muestra todos los hábitos sin filtro. Los
+/// siguientes chips corresponden a cada categoría existente, mostrando su
+/// icono y nombre. El chip activo se resalta con el color de la categoría.
+class _CategoryFilterChips extends StatelessWidget {
+  final List<Category> categories;
+  final String? selectedId;
+  final ValueChanged<String?> onSelected;
+
+  const _CategoryFilterChips({
+    required this.categories,
+    required this.selectedId,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (categories.isEmpty) return const SizedBox.shrink();
+    final textTheme = Theme.of(context).textTheme;
+
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          _buildChip(
+            context: context,
+            label: 'Todos',
+            icon: Icons.grid_view_rounded,
+            color: AppColors.neonGreen,
+            selected: selectedId == null,
+            onTap: () => onSelected(null),
+            textTheme: textTheme,
+          ),
+          const SizedBox(width: 8),
+          ...categories.map((category) {
+            final selected = selectedId == category.id;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _buildChip(
+                context: context,
+                label: category.name,
+                icon: category.icon ?? Icons.category_outlined,
+                color: category.iconColor ?? category.color,
+                selected: selected,
+                onTap: () => onSelected(selected ? null : category.id),
+                textTheme: textTheme,
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChip({
+    required BuildContext context,
+    required String label,
+    required IconData icon,
+    required Color color,
+    required bool selected,
+    required VoidCallback onTap,
+    required TextTheme textTheme,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? color.withValues(alpha: 0.18) : AppColors.surfaceDark,
+          borderRadius: BorderRadius.circular(AppConstants.cardRadius),
+          border: Border.all(
+            color: selected ? color : AppColors.borderDark,
+            width: selected ? 1.4 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: selected ? color : AppColors.textSecondary),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: textTheme.bodyMedium?.copyWith(
+                color: selected ? color : AppColors.textSecondary,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

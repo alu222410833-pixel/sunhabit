@@ -137,25 +137,34 @@ class EditHabitScreenState extends State<EditHabitScreen> {
     final isChecklist = _evaluationType == HabitEvaluationType.checklist;
     final isTimer = _evaluationType == HabitEvaluationType.timer;
 
-    final updated = widget.habit.copyWith(
+    final updated = Habit(
+      id: widget.habit.id,
       title: title,
       categoryId: _categoryId,
       description: description.isNotEmpty ? description : null,
+      iconAsset: widget.habit.iconAsset,
+      imagePath: widget.habit.imagePath,
       icon: category.icon,
       iconColor: category.iconColor,
-      yesNo: isYesNo ? (widget.habit.yesNo ?? false) : null,
       current: isAmount ? (widget.habit.current ?? 0) : null,
       target: isAmount ? _target : null,
       unit: isAmount ? _unit : null,
+      yesNo: isYesNo ? (widget.habit.yesNo ?? false) : null,
       checklist: isChecklist && _checklist.isNotEmpty ? List.from(_checklist) : null,
       completedChecklist: isChecklist ? (widget.habit.completedChecklist ?? []) : null,
       estimatedDuration: isTimer
           ? Duration(hours: _timerHours, minutes: _timerMinutes, seconds: _timerSeconds)
           : null,
       frequency: _frequency,
-      weekDays: _weekDays.contains(true) ? _weekDays : null,
-      monthDays: _monthDays.isNotEmpty ? _monthDays : null,
-      yearDays: _yearDays.isNotEmpty ? _yearDays : null,
+      weekDays: _frequency == 'Días exactos de la semana' && _weekDays.contains(true)
+          ? _weekDays
+          : null,
+      monthDays: _frequency == 'Días específicos del mes' && _monthDays.isNotEmpty
+          ? _monthDays
+          : null,
+      yearDays: _frequency == 'Días específicos del año' && _yearDays.isNotEmpty
+          ? _yearDays
+          : null,
       timesPerPeriod: _frequency == 'Algunas veces por período' ? _timesPerPeriod : null,
       periodType: _frequency == 'Algunas veces por período' ? _periodType : null,
       repeatInterval: (_frequency == 'Algunas veces por período' || _frequency == 'Repetir')
@@ -164,6 +173,8 @@ class EditHabitScreenState extends State<EditHabitScreen> {
       startDate: _startDate,
       endDate: _endDate,
       reminders: _reminders,
+      isCompleted: widget.habit.isCompleted,
+      points: widget.habit.points,
     );
 
     _repository.updateHabit(updated);
@@ -190,52 +201,6 @@ class EditHabitScreenState extends State<EditHabitScreen> {
         child: child!,
       ),
     );
-  }
-
-  Future<TimeOfDay?> _pickTime({required TimeOfDay initial}) async {
-    return showTimePicker(
-      context: context,
-      initialTime: initial,
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.dark(
-            primary: AppColors.neonGreen,
-            onPrimary: Color(0xFF152000),
-            surface: AppColors.surfaceElevated,
-            onSurface: AppColors.textPrimary,
-          ),
-        ),
-        child: child!,
-      ),
-    );
-  }
-
-  Future<void> _addReminder() async {
-    final picked = await _pickTime(initial: TimeOfDay.now());
-    if (picked == null) return;
-    setState(() {
-      _reminders.add(Reminder(hour: picked.hour, minute: picked.minute));
-    });
-  }
-
-  Future<void> _editReminder(int index) async {
-    final r = _reminders[index];
-    final picked = await _pickTime(initial: TimeOfDay(hour: r.hour, minute: r.minute));
-    if (picked == null) return;
-    setState(() {
-      _reminders[index] = r.copyWith(hour: picked.hour, minute: picked.minute);
-    });
-  }
-
-  void _toggleReminderType(int index) {
-    final r = _reminders[index];
-    setState(() {
-      _reminders[index] = r.copyWith(type: r.type == 'Alarma' ? 'Notificación' : 'Alarma');
-    });
-  }
-
-  void _removeReminder(int index) {
-    setState(() => _reminders.removeAt(index));
   }
 
   Future<void> _addMonthDay() async {
@@ -403,10 +368,9 @@ class EditHabitScreenState extends State<EditHabitScreen> {
               onTap: () => showRemindersEditor(
                 context,
                 reminders: _reminders,
-                onAdd: _addReminder,
-                onEdit: _editReminder,
-                onToggle: _toggleReminderType,
-                onRemove: _removeReminder,
+                category: category,
+                onRemindersChanged: (updated) =>
+                    setState(() => _reminders = updated),
               ),
             ),
             const SizedBox(height: 12),
@@ -423,6 +387,35 @@ class EditHabitScreenState extends State<EditHabitScreen> {
               child: Text(evaluationLabel(_evaluationType), style: textTheme.bodyMedium),
             ),
             const SizedBox(height: 12),
+            if (_evaluationType == HabitEvaluationType.amount) ...[
+              EditHabitTile(
+                icon: Icons.track_changes,
+                label: 'Meta de cantidad',
+                onTap: _editGoal,
+                child: Text('$_target $_unit', style: textTheme.bodyMedium),
+              ),
+              const SizedBox(height: 12),
+            ] else if (_evaluationType == HabitEvaluationType.timer) ...[
+              EditHabitTile(
+                icon: Icons.timer_outlined,
+                label: 'Duración objetivo',
+                onTap: _editGoal,
+                child: Text(_goalSummary, style: textTheme.bodyMedium),
+              ),
+              const SizedBox(height: 12),
+            ] else if (_evaluationType == HabitEvaluationType.checklist) ...[
+              EditHabitTile(
+                icon: Icons.checklist_rounded,
+                label: 'Tareas del checklist',
+                value: _checklist.length.toString(),
+                onTap: () => showChecklistEditor(
+                  context,
+                  checklist: _checklist,
+                  onUpdate: () => setState(() {}),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             EditHabitTile(
               icon: Icons.event_repeat,
               label: 'Frecuencia',
@@ -471,24 +464,6 @@ class EditHabitScreenState extends State<EditHabitScreen> {
                       ),
                     ),
                 ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            EditHabitTile(
-              icon: Icons.track_changes,
-              label: 'Objetivo diario',
-              onTap: _editGoal,
-              child: Text(_goalSummary, style: textTheme.bodyMedium),
-            ),
-            const SizedBox(height: 12),
-            EditHabitTile(
-              icon: Icons.check_circle_outline,
-              label: 'Objetivos adicionales',
-              value: _checklist.length.toString(),
-              onTap: () => showChecklistEditor(
-                context,
-                checklist: _checklist,
-                onUpdate: () => setState(() {}),
               ),
             ),
             if (widget.isEmbedded) ...[

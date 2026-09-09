@@ -1,10 +1,23 @@
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:sunhabit/core/services/media_cleanup_service.dart';
 import 'package:sunhabit/core/services/storage_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/features/categories/data/category_model.dart';
 import 'package:sunhabit/features/habits/data/habit_log_model.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
+
+/// Resultado de intentar eliminar una categoría de forma segura.
+enum CategoryDeletionResult {
+  /// La categoría se eliminó correctamente.
+  success,
+  /// No se pudo eliminar porque es la última categoría existente.
+  blockedLastCategory,
+  /// No se encontró la categoría indicada.
+  notFound,
+}
 
 class HabitsRepository extends ChangeNotifier {
   /// Instancia singleton usada por la app en producción.
@@ -24,6 +37,7 @@ class HabitsRepository extends ChangeNotifier {
 
   HabitsRepository._internal(this._storage) {
     _habits.clear();
+    _categories.clear();
     _logs.clear();
   }
 
@@ -33,6 +47,7 @@ class HabitsRepository extends ChangeNotifier {
 
   final StorageService _storage;
   final List<Habit> _habits = [];
+  final List<Category> _categories = [];
   final List<HabitLog> _logs = [];
 
   /// Día (año+mes+ día) de la última vez que se ejecutó el reset diario.
@@ -143,9 +158,9 @@ class HabitsRepository extends ChangeNotifier {
         return a.isCompleted ? 1 : -1;
       }
 
-      // 2. Ordenar por la hora del recordatorio más temprano (más temprano primero).
-      final aTime = a.earliestReminderMinutes;
-      final bTime = b.earliestReminderMinutes;
+      // 2. Ordenar por la hora del recordatorio más temprano aplicable a esta fecha.
+      final aTime = a.earliestReminderMinutesForDate(date);
+      final bTime = b.earliestReminderMinutesForDate(date);
 
       if (aTime != null && bTime != null) {
         final cmp = aTime.compareTo(bTime);
@@ -163,7 +178,7 @@ class HabitsRepository extends ChangeNotifier {
     return List.unmodifiable(result);
   }
 
-  List<Category> getCategories() => List.unmodifiable(defaultCategories);
+  List<Category> getCategories() => List.unmodifiable(_categories);
 
   List<HabitLog> getHabitLogs(String habitId) => List.unmodifiable(
         _logs
@@ -177,35 +192,43 @@ class HabitsRepository extends ChangeNotifier {
     final categoriesJson = await _storage.getString(categoriesKey);
     final logsJson = await _storage.getString(logsKey);
 
-    if (categoriesJson != null) {
+    bool shouldSave = false;
+
+    if (categoriesJson != null && categoriesJson.isNotEmpty && categoriesJson != '[]') {
       try {
         final List<dynamic> decoded = jsonDecode(categoriesJson);
-        defaultCategories
+        _categories
           ..clear()
           ..addAll(decoded
               .map((e) => Category.fromJson(e as Map<String, dynamic>)));
       } catch (e, st) {
         debugPrint('[HabitsRepository] Error loading categories: $e\n$st');
+        _resetDefaultCategories();
+        shouldSave = true;
       }
     } else {
       _resetDefaultCategories();
+      shouldSave = true;
     }
 
-    if (habitsJson != null) {
+    if (habitsJson != null && habitsJson.isNotEmpty && habitsJson != '[]') {
       try {
         final List<dynamic> decoded = jsonDecode(habitsJson);
         _habits
-        ..clear()
-        ..addAll(
-            decoded.map((e) => Habit.fromJson(e as Map<String, dynamic>)));
+          ..clear()
+          ..addAll(
+              decoded.map((e) => Habit.fromJson(e as Map<String, dynamic>)));
       } catch (e, st) {
         debugPrint('[HabitsRepository] Error loading habits: $e\n$st');
+        _resetDefaultHabits();
+        shouldSave = true;
       }
     } else {
       _resetDefaultHabits();
+      shouldSave = true;
     }
 
-    if (logsJson != null) {
+    if (logsJson != null && logsJson.isNotEmpty && logsJson != '[]') {
       try {
         final List<dynamic> decoded = jsonDecode(logsJson);
         _logs
@@ -215,6 +238,10 @@ class HabitsRepository extends ChangeNotifier {
       } catch (e, st) {
         debugPrint('[HabitsRepository] Error loading logs: $e\n$st');
       }
+    }
+
+    if (shouldSave) {
+      await _save();
     }
   }
 
@@ -281,31 +308,9 @@ class HabitsRepository extends ChangeNotifier {
   }
 
   void _resetDefaultCategories() {
-    defaultCategories
+    _categories
       ..clear()
-      ..addAll([
-        const Category(
-          id: 'health',
-          name: 'Salud',
-          color: AppColors.green,
-          icon: Icons.favorite_outline_rounded,
-          iconColor: AppColors.green,
-        ),
-        const Category(
-          id: 'study',
-          name: 'Estudio',
-          color: AppColors.purple,
-          icon: Icons.menu_book_rounded,
-          iconColor: AppColors.purple,
-        ),
-        const Category(
-          id: 'work',
-          name: 'Trabajo',
-          color: AppColors.gold,
-          icon: Icons.work_outline_rounded,
-          iconColor: AppColors.gold,
-        ),
-      ]);
+      ..addAll(defaultCategories);
   }
 
   void _resetDefaultHabits() {
@@ -371,7 +376,7 @@ class HabitsRepository extends ChangeNotifier {
 
   Future<void> _save() async {
     final habits = _habits.map((h) => h.toJson()).toList();
-    final categories = defaultCategories.map((c) => c.toJson()).toList();
+    final categories = _categories.map((c) => c.toJson()).toList();
     final logs = _logs.map((l) => l.toJson()).toList();
 
     notifyListeners();
@@ -381,59 +386,122 @@ class HabitsRepository extends ChangeNotifier {
     await _storage.setString(logsKey, jsonEncode(logs));
   }
 
-  void addHabit(Habit habit) {
+  Future<void> addHabit(Habit habit) async {
     _habits.add(habit);
-    _save();
+    await _save();
   }
 
-  void addCategory(Category category) {
-    defaultCategories.add(category);
-    _save();
+  Future<void> addCategory(Category category) async {
+    _categories.add(category);
+    await _save();
   }
 
-  void updateCategory(Category updated) {
-    final index = defaultCategories.indexWhere((c) => c.id == updated.id);
+  Future<void> updateCategory(Category updated) async {
+    final index = _categories.indexWhere((c) => c.id == updated.id);
     if (index != -1) {
-      defaultCategories[index] = updated;
-      _save();
+      final previous = _categories[index];
+      _categories[index] = updated;
+      await _save();
+      // Limpia los medios de la categoría anterior que ya no se usen.
+      _cleanupCategoryMediaDiff(previous, updated);
     }
   }
 
-  void updateHabit(Habit updated) {
+  /// Elimina una categoría de forma segura.
+  ///
+  /// - Si [id] no existe, devuelve [CategoryDeletionResult.notFound].
+  /// - Si es la última categoría, devuelve
+  ///   [CategoryDeletionResult.blockedLastCategory] (nunca se elimina).
+  /// - Si hay hábitos que referencian la categoría, se reasignan a
+  ///   [fallbackCategoryId] o, si es `null`, a la primera categoría restante.
+  ///   Los recordatorios de esos hábitos se reprograman para reflejar el
+  ///   cambio de categoría (sonido heredado, etc.).
+  Future<CategoryDeletionResult> deleteCategory(
+    String id, {
+    String? fallbackCategoryId,
+  }) async {
+    final target = _categories.where((c) => c.id == id).firstOrNull;
+    if (target == null) return CategoryDeletionResult.notFound;
+
+    // Nunca permitir eliminar la última categoría: el creador de hábitos
+    // asume que siempre hay al menos una disponible.
+    if (_categories.length <= 1) {
+      return CategoryDeletionResult.blockedLastCategory;
+    }
+
+    // Determinar la categoría de reasignación.
+    final remaining = _categories.where((c) => c.id != id).toList();
+    final fallback = (fallbackCategoryId != null &&
+            remaining.any((c) => c.id == fallbackCategoryId))
+        ? fallbackCategoryId
+        : remaining.first.id;
+
+    // Reasignar hábitos huérfanos.
+    final affectedHabits = <Habit>[];
+    for (var i = 0; i < _habits.length; i++) {
+      if (_habits[i].categoryId == id) {
+        _habits[i] = _habits[i].copyWith(categoryId: fallback);
+        affectedHabits.add(_habits[i]);
+      }
+    }
+
+    _categories.removeWhere((c) => c.id == id);
+    await _save();
+
+    // Limpia los medios propios de la categoría eliminada si no los usa nadie más.
+    _cleanupCategoryMediaDiff(target, null);
+
+    return CategoryDeletionResult.success;
+  }
+
+  Future<void> updateHabit(Habit updated) async {
     final index = _habits.indexWhere((h) => h.id == updated.id);
     if (index != -1) {
+      final previous = _habits[index];
       _habits[index] = updated;
       _logHabit(updated.id);
-      _save();
+      await _save();
+      // Limpia los medios del hábito anterior que ya no se usen.
+      _cleanupHabitMediaDiff(previous, updated);
     }
   }
 
-  void deleteHabit(String id) {
+  Future<void> deleteHabit(String id) async {
+    final habit = _habits.where((h) => h.id == id).firstOrNull;
     _habits.removeWhere((h) => h.id == id);
     _logs.removeWhere((l) => l.habitId == id);
-    _save();
+    await _save();
+    // Limpia los medios propios del hábito eliminado si no los usa nadie más.
+    if (habit != null) _cleanupHabitMediaDiff(habit, null);
   }
 
   Category? getCategoryById(String id) {
     try {
-      return defaultCategories.firstWhere((c) => c.id == id);
+      return _categories.firstWhere((c) => c.id == id);
     } catch (_) {
       return null;
     }
   }
 
   /// Resuelve el sonido efectivo para una alarma:
-  /// 1. Sonido específico del recordatorio si fue configurado.
+  /// 1. Sonido específico del recordatorio si fue configurado y existe.
   /// 2. Sonido predeterminado de la categoría del hábito si existe.
   /// 3. null (sonido predeterminado del sistema).
+  ///
+  /// Se valida la existencia del archivo para evitar que `alarm` falle con
+  /// un path hacia un archivo borrado o corrupto.
   String? getEffectiveSound(Habit habit, Reminder reminder) {
     if (reminder.soundPath != null && reminder.soundPath!.isNotEmpty) {
-      return reminder.soundPath;
+      final file = File(reminder.soundPath!);
+      if (file.existsSync() && file.lengthSync() > 0) return reminder.soundPath;
     }
     final category = getCategoryById(habit.categoryId);
     if (category?.defaultSoundPath != null &&
         category!.defaultSoundPath!.isNotEmpty) {
-      return category.defaultSoundPath;
+      final file = File(category.defaultSoundPath!);
+      if (file.existsSync() && file.lengthSync() > 0) {
+        return category.defaultSoundPath;
+      }
     }
     return null;
   }
@@ -595,5 +663,56 @@ class HabitsRepository extends ChangeNotifier {
     }
     _logHabit(id);
     await _save();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Limpieza de medios huérfanos (imágenes / audios) en disco.
+  // ---------------------------------------------------------------------------
+
+  /// Compara los medios de [previous] y [updated] para un hábito y elimina
+  /// de disco los archivos que ya no están referenciados por ningún hábito,
+  /// categoría o recordatorio.
+  ///
+  /// Si [updated] es `null` (hábito eliminado), se limpian todos los medios
+  /// propios del hábito anterior.
+  void _cleanupHabitMediaDiff(Habit previous, Habit? updated) {
+    final oldPaths = <String?>[
+      previous.imagePath,
+      ...previous.reminders.map((r) => r.soundPath),
+    ];
+    final newPaths = updated == null
+        ? const <String?>[]
+        : <String?>[
+            updated.imagePath,
+            ...updated.reminders.map((r) => r.soundPath),
+          ];
+    MediaCleanupService.instance.deleteUnused(
+      oldPaths: oldPaths,
+      keepPaths: newPaths,
+      repository: this,
+    );
+  }
+
+  /// Compara los medios de [previous] y [updated] para una categoría y elimina
+  /// de disco los archivos que ya no están referenciados.
+  ///
+  /// Si [updated] es `null` (categoría eliminada), se limpian los medios
+  /// propios de la categoría anterior.
+  void _cleanupCategoryMediaDiff(Category previous, Category? updated) {
+    final oldPaths = <String?>[
+      previous.imagePath,
+      previous.defaultSoundPath,
+    ];
+    final newPaths = updated == null
+        ? const <String?>[]
+        : <String?>[
+            updated.imagePath,
+            updated.defaultSoundPath,
+          ];
+    MediaCleanupService.instance.deleteUnused(
+      oldPaths: oldPaths,
+      keepPaths: newPaths,
+      repository: this,
+    );
   }
 }

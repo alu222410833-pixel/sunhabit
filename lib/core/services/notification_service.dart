@@ -13,6 +13,7 @@ import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/habit_execution_service.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
+import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
 
 /// Maneja las acciones de notificación cuando la app está terminada o en background.
 ///
@@ -54,6 +55,14 @@ Future<void> _notificationBackgroundHandler(NotificationResponse response) async
       break;
     case 'action_add_amount':
       await HabitsRepository().incrementHabitAmount(payload, 1);
+      break;
+    case 'action_input_amount':
+      if (response.input != null && response.input!.trim().isNotEmpty) {
+        final amount = int.tryParse(response.input!.trim());
+        if (amount != null && amount > 0) {
+          await HabitsRepository().incrementHabitAmount(payload, amount);
+        }
+      }
       break;
     case 'action_snooze_10':
       await NotificationService.snoozeHabit(payload, 10);
@@ -212,6 +221,11 @@ class NotificationService {
     final actions = _buildActionsForHabit(habit);
     final body = _buildBodyForHabit(habit, at);
 
+    final imagePath = habit.effectiveImagePath;
+    final largeIcon = (imagePath != null && File(imagePath).existsSync())
+        ? FilePathAndroidBitmap(imagePath)
+        : null;
+
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         _channelId,
@@ -224,6 +238,7 @@ class NotificationService {
         ongoing: false,
         enableLights: true,
         showWhen: true,
+        largeIcon: largeIcon,
         actions: actions,
       ),
       iOS: const DarwinNotificationDetails(
@@ -388,6 +403,14 @@ class NotificationService {
       case 'action_add_amount':
         HabitsRepository().incrementHabitAmount(habitId, 1);
         break;
+      case 'action_input_amount':
+        if (response.input != null && response.input!.trim().isNotEmpty) {
+          final amount = int.tryParse(response.input!.trim());
+          if (amount != null && amount > 0) {
+            HabitsRepository().incrementHabitAmount(habitId, amount);
+          }
+        }
+        break;
       case 'action_snooze_10':
         snoozeHabit(habitId, 10);
         break;
@@ -475,9 +498,21 @@ class NotificationService {
             showsUserInterface: false,
             cancelNotification: true,
           ),
+          AndroidNotificationAction(
+            'action_input_amount',
+            '✍ Escribir',
+            showsUserInterface: false,
+            cancelNotification: true,
+            allowGeneratedReplies: true,
+            inputs: [
+              AndroidNotificationActionInput(
+                label: 'Ingresar cantidad${unitStr.isNotEmpty ? " en$unitStr" : ""}',
+              ),
+            ],
+          ),
           const AndroidNotificationAction(
             'action_open',
-            '📝 Registrar',
+            '📝 Abrir',
             showsUserInterface: true,
             cancelNotification: true,
           ),

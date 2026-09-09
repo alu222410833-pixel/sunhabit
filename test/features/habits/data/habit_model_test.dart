@@ -145,5 +145,40 @@ void main() {
       );
       expect(habit.earliestReminderMinutes, 7 * 60 + 15);
     });
+
+    test('filtra recordatorios por día de la semana para una fecha concreta', () {
+      // 2026-09-09 is Wednesday (index 2)
+      final wednesday = DateTime(2026, 9, 9);
+      // 2026-09-11 is Friday (index 4)
+      final friday = DateTime(2026, 9, 11);
+
+      final habit = Habit(
+        id: '1',
+        title: 'Recordatorios por día',
+        categoryId: 'test',
+        reminders: const [
+          Reminder(
+            hour: 14,
+            minute: 11,
+            // L, M, X, J, D
+            weekDays: [true, true, true, true, false, false, true],
+          ),
+          Reminder(
+            hour: 19,
+            minute: 11,
+            // V, S
+            weekDays: [false, false, false, false, true, true, false],
+          ),
+        ],
+      );
+
+      // En miércoles debe dar 14:11
+      expect(habit.earliestReminderMinutesForDate(wednesday), 14 * 60 + 11);
+      expect(habit.reminderTimeTextForDate(wednesday), '14:11');
+
+      // En viernes debe dar 19:11
+      expect(habit.earliestReminderMinutesForDate(friday), 19 * 60 + 11);
+      expect(habit.reminderTimeTextForDate(friday), '19:11');
+    });
   });
 }

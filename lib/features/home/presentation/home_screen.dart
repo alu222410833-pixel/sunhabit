@@ -128,7 +128,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             onTap = () =>
                                 _openHabitCompletion(context, habit.id);
                           }
-                          return HomeHabitTile(habit: habit, onTap: onTap);
+                          return HomeHabitTile(
+                            habit: habit,
+                            selectedDate: _selectedDate,
+                            onTap: onTap,
+                          );
                         },
                       ),
                     if (isToday) _buildActiveTimerBanner(theme),

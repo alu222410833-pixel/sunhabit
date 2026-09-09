@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sunhabit/core/constants/app_constants.dart';
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/backup_service.dart';
+import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/core/theme/app_decorations.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
@@ -29,6 +30,7 @@ class UserProfileScreen extends StatelessWidget {
       if (!context.mounted) return;
       if (imported) {
         await HabitsRepository().reload();
+        await ReminderService.instance.scheduleAllHabits();
         if (!context.mounted) return;
         _showSnackBar(context, 'Backup importado correctamente.');
       }
