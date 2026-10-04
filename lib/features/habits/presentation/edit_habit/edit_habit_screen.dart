@@ -57,6 +57,8 @@ class EditHabitScreenState extends State<EditHabitScreen> {
   late int _timerMinutes;
   late int _timerSeconds;
 
+  bool _isSaving = false;
+
   final _frequencies = const [
     'Todos los días',
     'Días exactos de la semana',
@@ -126,8 +128,13 @@ class EditHabitScreenState extends State<EditHabitScreen> {
   Category? get _category => _repository.getCategoryById(_categoryId);
 
   Future<void> _save() async {
+    if (_isSaving) return;
     final title = _titleController.text.trim();
-    if (title.isEmpty) return;
+    if (title.isEmpty) {
+      _showMessage('Escribe un nombre para el hábito', isError: true);
+      return;
+    }
+    setState(() => _isSaving = true);
 
     final description = _descriptionController.text.trim();
     final category = _category ?? _repository.getCategories().first;
@@ -177,10 +184,50 @@ class EditHabitScreenState extends State<EditHabitScreen> {
       points: widget.habit.points,
     );
 
-    _repository.updateHabit(updated);
+    await _repository.updateHabit(updated);
     await ReminderService.instance.scheduleHabit(updated);
-    if (widget.isEmbedded) return;
-    if (mounted) Navigator.of(context).pop();
+    if (!mounted) return;
+    _showMessage('Cambios guardados');
+    if (!widget.isEmbedded) {
+      Navigator.of(context).pop();
+    }
+    setState(() => _isSaving = false);
+  }
+
+  void _showMessage(String text, {bool isError = false}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.surfaceElevated,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          duration: const Duration(seconds: 2),
+          content: Row(
+            children: [
+              Icon(
+                isError
+                    ? Icons.error_outline_rounded
+                    : Icons.check_circle_rounded,
+                color: isError ? AppColors.danger : AppColors.neonGreen,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  text,
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
   }
 
   Future<DateTime?> _pickDate({required DateTime initial}) async {
@@ -469,18 +516,27 @@ class EditHabitScreenState extends State<EditHabitScreen> {
             if (widget.isEmbedded) ...[
               const SizedBox(height: 32),
               GestureDetector(
-                onTap: _save,
+                onTap: _isSaving ? null : _save,
                 child: Container(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   decoration: AppDecorations.neonButton,
                   alignment: Alignment.center,
-                  child: const Text(
-                    'Guardar cambios',
-                    style: TextStyle(
-                      color: Color(0xFF152000),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  child: _isSaving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Color(0xFF152000),
+                          ),
+                        )
+                      : const Text(
+                          'Guardar cambios',
+                          style: TextStyle(
+                            color: Color(0xFF152000),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                 ),
               ),
             ],
@@ -499,11 +555,20 @@ class EditHabitScreenState extends State<EditHabitScreen> {
         title: const Text('Editar'),
         actions: [
           TextButton(
-            onPressed: _save,
-            child: const Text(
-              'Guardar',
-              style: TextStyle(color: AppColors.neonGreen, fontWeight: FontWeight.w700),
-            ),
+            onPressed: _isSaving ? null : _save,
+            child: _isSaving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.neonGreen,
+                    ),
+                  )
+                : const Text(
+                    'Guardar',
+                    style: TextStyle(color: AppColors.neonGreen, fontWeight: FontWeight.w700),
+                  ),
           ),
           const SizedBox(width: 8),
         ],

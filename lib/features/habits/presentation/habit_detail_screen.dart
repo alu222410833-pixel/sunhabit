@@ -64,7 +64,7 @@ class _HabitDetailScreenState extends State<HabitDetailScreen> {
     if (habit != null) {
       await ReminderService.instance.cancelHabit(habit);
     }
-    _repository.deleteHabit(widget.habitId);
+    await _repository.deleteHabit(widget.habitId);
     if (mounted) Navigator.pop(context);
   }
 

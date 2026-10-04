@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:alarm/alarm.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -7,6 +8,7 @@ import 'package:sunhabit/core/constants/app_constants.dart';
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/notification_service.dart';
+import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/core/theme/app_decorations.dart';
 
@@ -20,11 +22,14 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _exactAlarmsAllowed = true;
   bool _batteryOptIgnored = false;
+  bool _reactivatingAlarms = false;
+  int? _systemAlarmCount;
 
   @override
   void initState() {
     super.initState();
     _checkPermissionsStatus();
+    _refreshSystemAlarmCount();
   }
 
   Future<void> _checkPermissionsStatus() async {
@@ -36,6 +41,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _exactAlarmsAllowed = canExact;
         _batteryOptIgnored = batteryStatus.isGranted;
       });
+    }
+  }
+
+  Future<void> _refreshSystemAlarmCount() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final alarms = await Alarm.getAlarms();
+      if (mounted) setState(() => _systemAlarmCount = alarms.length);
+    } catch (_) {
+      // Si falla la consulta, simplemente no mostramos el contador.
+    }
+  }
+
+  Future<void> _reactivateAlarms(BuildContext context) async {
+    if (_reactivatingAlarms) return;
+    setState(() => _reactivatingAlarms = true);
+    try {
+      final scheduled = await ReminderService.instance.scheduleAllHabits();
+      await _refreshSystemAlarmCount();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Alarmas reactivadas: $scheduled recordatorios programados '
+            '(${_systemAlarmCount ?? '?'} activos en el sistema).',
+          ),
+          backgroundColor: AppColors.surfaceHighest,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _reactivatingAlarms = false);
     }
   }
 
@@ -231,6 +268,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           const Icon(
                             Icons.chevron_right_rounded,
+                            color: AppColors.textSecondary,
+                            size: 28,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              // Tarjeta de reactivación de alarmas
+              Container(
+                decoration: AppDecorations.card,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(AppConstants.cardRadius),
+                    onTap: _reactivatingAlarms
+                        ? null
+                        : () => _reactivateAlarms(context),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 16,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.neonGreen.withValues(alpha: 0.12),
+                              border: Border.all(
+                                color: AppColors.neonGreen.withValues(alpha: 0.3),
+                              ),
+                            ),
+                            child: _reactivatingAlarms
+                                ? const Padding(
+                                    padding: EdgeInsets.all(12),
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: AppColors.neonGreen,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.alarm_on_rounded,
+                                    color: AppColors.neonGreen,
+                                    size: 24,
+                                  ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Reactivar alarmas',
+                                  style: textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _systemAlarmCount == null
+                                      ? 'Vuelve a programar todos los recordatorios'
+                                      : '$_systemAlarmCount activas en el sistema · toca para reprogramar',
+                                  style: textTheme.bodyMedium?.copyWith(
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.refresh_rounded,
                             color: AppColors.textSecondary,
                             size: 28,
                           ),

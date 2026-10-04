@@ -76,6 +76,13 @@ class TimerSectionState extends State<TimerSection> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final accent = widget.habit.iconColor ?? AppColors.neonGreen;
+    final timeStyle = theme.textTheme.displayLarge?.copyWith(
+      color: accent,
+      shadows: [
+        Shadow(color: accent.withValues(alpha: 0.35), blurRadius: 18),
+      ],
+    );
 
     if (widget.readOnly) {
       return Column(
@@ -84,13 +91,13 @@ class TimerSectionState extends State<TimerSection> {
             widget.habit.estimatedDuration != null
                 ? _formatDuration(widget.habit.estimatedDuration!)
                 : '00:00:00',
-            style: theme.textTheme.displayLarge,
+            style: timeStyle,
           ),
           const SizedBox(height: 8),
           if (widget.habit.estimatedDuration != null)
             Text(
               'Meta: ${_formatDuration(widget.habit.estimatedDuration!)}',
-              style: theme.textTheme.bodyMedium,
+              style: theme.textTheme.bodyMedium?.copyWith(color: accent),
             ),
           const SizedBox(height: 24),
           if (widget.habit.isCompleted)
@@ -129,12 +136,12 @@ class TimerSectionState extends State<TimerSection> {
 
         return Column(
           children: [
-            Text(displayTime, style: theme.textTheme.displayLarge),
+            Text(displayTime, style: timeStyle),
             const SizedBox(height: 8),
             if (widget.habit.estimatedDuration != null)
               Text(
                 'Meta: ${_formatDuration(widget.habit.estimatedDuration!)}',
-                style: theme.textTheme.bodyMedium,
+                style: theme.textTheme.bodyMedium?.copyWith(color: accent),
               ),
             const SizedBox(height: 24),
             if (isCompleted && !hasStarted)

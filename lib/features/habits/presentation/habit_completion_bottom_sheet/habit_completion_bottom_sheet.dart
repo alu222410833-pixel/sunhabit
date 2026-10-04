@@ -64,18 +64,73 @@ class _HabitCompletionBottomSheetState
   }
 
   Widget _buildSheet(BuildContext context, Habit habit) {
+    final iconColor = habit.iconColor ?? AppColors.neonGreen;
+
     return Container(
-      decoration: AppDecorations.pageBackground,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color.lerp(const Color(0xFF171B17), iconColor, 0.12)!,
+            const Color(0xFF0A0C0A),
+            const Color(0xFF0C120B),
+          ],
+          stops: const [0.0, 0.55, 1.0],
+        ),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(
+          top: BorderSide(color: iconColor.withValues(alpha: 0.5), width: 1.4),
+          left: const BorderSide(color: AppColors.borderDark),
+          right: const BorderSide(color: AppColors.borderDark),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: iconColor.withValues(alpha: 0.16),
+            blurRadius: 26,
+            offset: const Offset(0, -6),
+          ),
+        ],
+      ),
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildHeader(habit),
-                const SizedBox(height: 24),
+                Center(
+                  child: Container(
+                    width: 42,
+                    height: 4.5,
+                    decoration: BoxDecoration(
+                      color: iconColor.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: iconColor.withValues(alpha: 0.4),
+                          blurRadius: 8,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _buildHeader(habit, iconColor),
+                const SizedBox(height: 14),
+                Container(
+                  height: 1,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        iconColor.withValues(alpha: 0.55),
+                        iconColor.withValues(alpha: 0.05),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
                 _buildBody(habit),
                 const SizedBox(height: 16),
               ],
@@ -86,21 +141,21 @@ class _HabitCompletionBottomSheetState
     );
   }
 
-  /// Encabezado con icono, título y botón para cerrar el bottom sheet.
-  Widget _buildHeader(Habit habit) {
-    final iconColor = habit.iconColor ?? AppColors.neonGreen;
+  /// Encabezado con icono, título, progreso actual y botón para cerrar.
+  Widget _buildHeader(Habit habit, Color iconColor) {
     final imagePath = habit.effectiveImagePath;
+    final progress = habit.progressText;
 
     return Row(
       children: [
         Container(
-          width: 40,
-          height: 40,
-          decoration: AppDecorations.iconOnlyGlow(iconColor),
+          width: 44,
+          height: 44,
+          decoration: AppDecorations.iconGlow(iconColor),
           alignment: Alignment.center,
           child: imagePath != null
               ? HabitImageAvatar(imagePath: imagePath, size: 40)
-              : Icon(habit.effectiveIcon, color: iconColor, size: 27),
+              : Icon(habit.effectiveIcon, color: iconColor, size: 28),
         ),
         const SizedBox(width: 14),
         Expanded(
@@ -117,6 +172,14 @@ class _HabitCompletionBottomSheetState
                 Text(
                   'Solo visualización',
                   style: Theme.of(context).textTheme.bodySmall,
+                )
+              else if (progress != null)
+                Text(
+                  progress,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: iconColor,
+                        fontWeight: FontWeight.w600,
+                      ),
                 ),
             ],
           ),

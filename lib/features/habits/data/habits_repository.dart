@@ -77,10 +77,7 @@ class HabitsRepository extends ChangeNotifier {
   void checkDayChange() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    if (_lastResetDay == null ||
-        today.year != _lastResetDay!.year ||
-        today.month != _lastResetDay!.month ||
-        today.day != _lastResetDay!.day) {
+    if (_lastResetDay == null || !_isSameDay(today, _lastResetDay!)) {
       _resetDailyCompletion();
     }
   }
@@ -104,7 +101,7 @@ class HabitsRepository extends ChangeNotifier {
     final target = DateTime(date.year, date.month, date.day);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final isToday = target == today;
+    final isToday = _isSameDay(target, today);
 
     final result = <Habit>[];
     for (final habit in _habits) {
@@ -115,50 +112,17 @@ class HabitsRepository extends ChangeNotifier {
         continue;
       }
 
-      // Busca el log del día objetivo.
-      final log = _logs.cast<HabitLog?>().firstWhere(
-            (l) =>
-                l != null &&
-                l.habitId == habit.id &&
-                l.date.year == target.year &&
-                l.date.month == target.month &&
-                l.date.day == target.day,
-            orElse: () => null,
-          );
-
-      if (log != null) {
-        result.add(habit.copyWith(
-          isCompleted: log.isCompleted,
-          current: log.currentValue ?? habit.current,
-          completedChecklist: log.completedChecklist ?? habit.completedChecklist,
-          yesNo: habit.evaluationType == HabitEvaluationType.yesNo
-              ? log.isCompleted
-              : habit.yesNo,
-        ));
-      } else {
-        // Sin log: estado en blanco para ese día.
-        result.add(habit.copyWith(
-          isCompleted: false,
-          current: habit.evaluationType == HabitEvaluationType.amount
-              ? 0
-              : habit.current,
-          completedChecklist:
-              habit.evaluationType == HabitEvaluationType.checklist
-                  ? <String>[]
-                  : habit.completedChecklist,
-          yesNo: habit.evaluationType == HabitEvaluationType.yesNo
-              ? false
-              : habit.yesNo,
-        ));
-      }
+      final log = _findLogForDate(habit.id, target);
+      result.add(log != null
+          ? _projectHabitForDate(habit, log)
+          : _blankHabitForDate(habit));
     }
+
     result.sort((a, b) {
-      // 1. Hábitos no completados primero; hábitos completados abajo.
       if (a.isCompleted != b.isCompleted) {
         return a.isCompleted ? 1 : -1;
       }
 
-      // 2. Ordenar por la hora del recordatorio más temprano aplicable a esta fecha.
       final aTime = a.earliestReminderMinutesForDate(date);
       final bTime = b.earliestReminderMinutesForDate(date);
 
@@ -171,7 +135,6 @@ class HabitsRepository extends ChangeNotifier {
         return 1;
       }
 
-      // 3. Desempate por título alfabético.
       return a.title.toLowerCase().compareTo(b.title.toLowerCase());
     });
 
@@ -194,9 +157,12 @@ class HabitsRepository extends ChangeNotifier {
 
     bool shouldSave = false;
 
-    if (categoriesJson != null && categoriesJson.isNotEmpty && categoriesJson != '[]') {
+    if (_isJsonEmpty(categoriesJson)) {
+      _resetDefaultCategories();
+      shouldSave = true;
+    } else {
       try {
-        final List<dynamic> decoded = jsonDecode(categoriesJson);
+        final List<dynamic> decoded = jsonDecode(categoriesJson!);
         _categories
           ..clear()
           ..addAll(decoded
@@ -206,14 +172,14 @@ class HabitsRepository extends ChangeNotifier {
         _resetDefaultCategories();
         shouldSave = true;
       }
-    } else {
-      _resetDefaultCategories();
-      shouldSave = true;
     }
 
-    if (habitsJson != null && habitsJson.isNotEmpty && habitsJson != '[]') {
+    if (_isJsonEmpty(habitsJson)) {
+      _resetDefaultHabits();
+      shouldSave = true;
+    } else {
       try {
-        final List<dynamic> decoded = jsonDecode(habitsJson);
+        final List<dynamic> decoded = jsonDecode(habitsJson!);
         _habits
           ..clear()
           ..addAll(
@@ -223,14 +189,11 @@ class HabitsRepository extends ChangeNotifier {
         _resetDefaultHabits();
         shouldSave = true;
       }
-    } else {
-      _resetDefaultHabits();
-      shouldSave = true;
     }
 
-    if (logsJson != null && logsJson.isNotEmpty && logsJson != '[]') {
+    if (!_isJsonEmpty(logsJson)) {
       try {
-        final List<dynamic> decoded = jsonDecode(logsJson);
+        final List<dynamic> decoded = jsonDecode(logsJson!);
         _logs
           ..clear()
           ..addAll(
@@ -240,9 +203,32 @@ class HabitsRepository extends ChangeNotifier {
       }
     }
 
+    final removed = _cleanupOldLogs();
+    if (removed > 0) shouldSave = true;
+
     if (shouldSave) {
       await _save();
     }
+  }
+
+  /// Elimina los logs más antiguos de [daysToKeep] días.
+  ///
+  /// Evita que `_logs` crezca indefinidamente y degrade el rendimiento de
+  /// `_load()`/`_save()`/`_resetDailyCompletion()`/`getHabitsForDate()` al
+  /// acumular cientos de entradas tras semanas de uso.
+  ///
+  /// Devuelve el número de logs eliminados.
+  int _cleanupOldLogs({int daysToKeep = 90}) {
+    if (_logs.isEmpty) return 0;
+    final cutoff = DateTime.now().subtract(Duration(days: daysToKeep));
+    final before = _logs.length;
+    _logs.removeWhere((l) => l.date.isBefore(cutoff));
+    final removed = before - _logs.length;
+    if (removed > 0) {
+      debugPrint(
+          '[HabitsRepository] Cleaned $removed old logs (kept ${_logs.length})');
+    }
+    return removed;
   }
 
   /// Resetea el estado de completado de los hábitos al cambiar de día.
@@ -259,28 +245,16 @@ class HabitsRepository extends ChangeNotifier {
 
     for (var i = 0; i < _habits.length; i++) {
       final habit = _habits[i];
-      final logsForHabit = _logs
-          .where((l) => l.habitId == habit.id)
-          .toList()
-        ..sort((a, b) => a.date.compareTo(b.date));
+      final todayLog = _findLogForDate(habit.id, today);
 
-      final hasTodayLog = logsForHabit.any((l) =>
-          l.date.year == today.year &&
-          l.date.month == today.month &&
-          l.date.day == today.day);
-
-      if (hasTodayLog) {
+      if (todayLog != null) {
         // Ya hay un registro de hoy: respetar el estado guardado en el log.
-        final todayLog = logsForHabit.lastWhere((l) =>
-            l.date.year == today.year &&
-            l.date.month == today.month &&
-            l.date.day == today.day);
         if (habit.isCompleted != todayLog.isCompleted) {
           _habits[i] = habit.copyWith(
             isCompleted: todayLog.isCompleted,
             current: todayLog.currentValue ?? habit.current,
-            completedChecklist: todayLog.completedChecklist ??
-                habit.completedChecklist,
+            completedChecklist:
+                todayLog.completedChecklist ?? habit.completedChecklist,
           );
           changed = true;
         }
@@ -289,16 +263,7 @@ class HabitsRepository extends ChangeNotifier {
         if (habit.isCompleted ||
             habit.current != null ||
             habit.completedChecklist != null) {
-          _habits[i] = habit.copyWith(
-            isCompleted: false,
-            current: habit.evaluationType == HabitEvaluationType.amount
-                ? 0
-                : habit.current,
-            completedChecklist:
-                habit.evaluationType == HabitEvaluationType.checklist
-                    ? <String>[]
-                    : habit.completedChecklist,
-          );
+          _habits[i] = _blankHabitForDate(habit);
           changed = true;
         }
       }
@@ -437,11 +402,9 @@ class HabitsRepository extends ChangeNotifier {
         : remaining.first.id;
 
     // Reasignar hábitos huérfanos.
-    final affectedHabits = <Habit>[];
     for (var i = 0; i < _habits.length; i++) {
       if (_habits[i].categoryId == id) {
         _habits[i] = _habits[i].copyWith(categoryId: fallback);
-        affectedHabits.add(_habits[i]);
       }
     }
 
@@ -475,13 +438,8 @@ class HabitsRepository extends ChangeNotifier {
     if (habit != null) _cleanupHabitMediaDiff(habit, null);
   }
 
-  Category? getCategoryById(String id) {
-    try {
-      return _categories.firstWhere((c) => c.id == id);
-    } catch (_) {
-      return null;
-    }
-  }
+  Category? getCategoryById(String id) =>
+      _categories.where((c) => c.id == id).firstOrNull;
 
   /// Resuelve el sonido efectivo para una alarma:
   /// 1. Sonido específico del recordatorio si fue configurado y existe.
@@ -506,13 +464,8 @@ class HabitsRepository extends ChangeNotifier {
     return null;
   }
 
-  Habit? getHabitById(String id) {
-    try {
-      return _habits.firstWhere((h) => h.id == id);
-    } catch (_) {
-      return null;
-    }
-  }
+  Habit? getHabitById(String id) =>
+      _habits.where((h) => h.id == id).firstOrNull;
 
   void _logHabit(String id, {int? overrideCurrentValue}) {
     final habit = getHabitById(id);
@@ -521,11 +474,7 @@ class HabitsRepository extends ChangeNotifier {
     final today = DateTime.now();
     final logDate = DateTime(today.year, today.month, today.day);
     final index = _logs.indexWhere(
-      (l) =>
-          l.habitId == id &&
-          l.date.year == logDate.year &&
-          l.date.month == logDate.month &&
-          l.date.day == logDate.day,
+      (l) => l.habitId == id && _isSameDay(l.date, logDate),
     );
 
     final currentValue = overrideCurrentValue ?? switch (habit.evaluationType) {
@@ -551,52 +500,46 @@ class HabitsRepository extends ChangeNotifier {
     }
   }
 
-  void completeHabit(String id) {
-    final habit = getHabitById(id);
-    if (habit != null) {
-      habit.isCompleted = true;
-      if (habit.evaluationType == HabitEvaluationType.yesNo) {
-        final index = _habits.indexWhere((h) => h.id == id);
-        if (index != -1) {
-          _habits[index] = habit.copyWith(yesNo: true, isCompleted: true);
-        }
-      }
+  Future<void> completeHabit(String id) async {
+    final index = _habits.indexWhere((h) => h.id == id);
+    if (index != -1) {
+      final habit = _habits[index];
+      _habits[index] = habit.evaluationType == HabitEvaluationType.yesNo
+          ? habit.copyWith(yesNo: true, isCompleted: true)
+          : habit.copyWith(isCompleted: true);
     }
     _logHabit(id);
-    _save();
+    await _save();
   }
 
   /// Completa un hábito de tipo cronómetro y guarda la duración real
   /// transcurrida (en segundos) en el log del día.
-  void completeHabitWithDuration(String id, int seconds) {
+  Future<void> completeHabitWithDuration(String id, int seconds) async {
     final index = _habits.indexWhere((h) => h.id == id);
     if (index != -1) {
       _habits[index] = _habits[index].copyWith(isCompleted: true);
     }
     _logHabit(id, overrideCurrentValue: seconds);
-    _save();
+    await _save();
   }
 
   /// Guarda la duración transcurrida de un hábito tipo cronómetro sin marcarlo
   /// como completado. Útil cuando el usuario pulsa "Finalizar" manualmente.
-  void saveHabitDuration(String id, int seconds) {
+  Future<void> saveHabitDuration(String id, int seconds) async {
     _logHabit(id, overrideCurrentValue: seconds);
-    _save();
+    await _save();
   }
 
-  void uncompleteHabit(String id) {
-    final habit = getHabitById(id);
-    if (habit != null) {
-      habit.isCompleted = false;
-      if (habit.evaluationType == HabitEvaluationType.yesNo) {
-        final index = _habits.indexWhere((h) => h.id == id);
-        if (index != -1) {
-          _habits[index] = habit.copyWith(yesNo: false, isCompleted: false);
-        }
-      }
+  Future<void> uncompleteHabit(String id) async {
+    final index = _habits.indexWhere((h) => h.id == id);
+    if (index != -1) {
+      final habit = _habits[index];
+      _habits[index] = habit.evaluationType == HabitEvaluationType.yesNo
+          ? habit.copyWith(yesNo: false, isCompleted: false)
+          : habit.copyWith(isCompleted: false);
     }
     _logHabit(id);
-    _save();
+    await _save();
   }
 
   Future<void> setHabitYesNo(String id, bool value) async {
@@ -663,6 +606,56 @@ class HabitsRepository extends ChangeNotifier {
     }
     _logHabit(id);
     await _save();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers privados para compartir lógica repetida.
+  // ---------------------------------------------------------------------------
+
+  /// Devuelve `true` si dos fechas son del mismo día (ignorando la hora).
+  static bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Devuelve `true` si el JSON de almacenamiento está vacío o es `null`.
+  static bool _isJsonEmpty(String? json) =>
+      json == null || json.isEmpty || json == '[]';
+
+  /// Busca el `HabitLog` de [habitId] para la fecha [date] (mismo día).
+  /// Devuelve `null` si no existe.
+  HabitLog? _findLogForDate(String habitId, DateTime date) {
+    return _logs
+        .where((l) => l.habitId == habitId && _isSameDay(l.date, date))
+        .lastOrNull;
+  }
+
+  /// Proyecta un hábito para una fecha concreta aplicando el estado
+  /// guardado en [log]. Usado por [getHabitsForDate] para días distintos a hoy.
+  Habit _projectHabitForDate(Habit habit, HabitLog log) {
+    return habit.copyWith(
+      isCompleted: log.isCompleted,
+      current: log.currentValue ?? habit.current,
+      completedChecklist: log.completedChecklist ?? habit.completedChecklist,
+      yesNo: habit.evaluationType == HabitEvaluationType.yesNo
+          ? log.isCompleted
+          : habit.yesNo,
+    );
+  }
+
+  /// Devuelve el hábito con estado "en blanco" para una fecha sin log.
+  Habit _blankHabitForDate(Habit habit) {
+    return habit.copyWith(
+      isCompleted: false,
+      current: habit.evaluationType == HabitEvaluationType.amount
+          ? 0
+          : habit.current,
+      completedChecklist:
+          habit.evaluationType == HabitEvaluationType.checklist
+              ? <String>[]
+              : habit.completedChecklist,
+      yesNo: habit.evaluationType == HabitEvaluationType.yesNo
+          ? false
+          : habit.yesNo,
+    );
   }
 
   // ---------------------------------------------------------------------------

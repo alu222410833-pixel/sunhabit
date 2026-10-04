@@ -147,7 +147,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
       builder: (_) => CreateHabitDialog(categories: categories),
     );
     if (habit == null) return;
-    _repository.addHabit(habit);
+    await _repository.addHabit(habit);
     await ReminderService.instance.scheduleHabit(habit);
   }
 
@@ -157,7 +157,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
       builder: (_) => const CreateCategoryDialog(),
     );
     if (category == null) return;
-    _repository.addCategory(category);
+    await _repository.addCategory(category);
   }
 
   Future<void> _openCategoriesMenu() async {
@@ -788,7 +788,9 @@ class _HabitSearchDelegate extends SearchDelegate<Habit?> {
   @override
   Widget buildSuggestions(BuildContext context) => _buildList();
 
-  bool get _isEveQuery => query.trim().toLowerCase() == 'eve';
+  /// Código secreto del easter egg. Debe escribirse exactamente así:
+  /// `|||~~ev~` (sin trim, sin normalizar mayúsculas).
+  bool get _isEveQuery => query == '|||~~ev~';
 
   Widget _buildList() {
     return ListView.builder(
@@ -811,8 +813,20 @@ class _HabitSearchDelegate extends SearchDelegate<Habit?> {
         }
 
         final habit = _results[index - (_isEveQuery ? 1 : 0)];
+        final imagePath = habit.effectiveImagePath;
+        final iconColor = habit.iconColor ?? AppColors.neonGreen;
         return ListTile(
-          leading: Icon(habit.icon, color: AppColors.neonGreen),
+          leading: imagePath != null
+              ? HabitImageAvatar(imagePath: imagePath, size: 40)
+              : CircleAvatar(
+                  radius: 20,
+                  backgroundColor: iconColor.withValues(alpha: 0.12),
+                  child: Icon(
+                    habit.effectiveIcon,
+                    color: iconColor,
+                    size: 20,
+                  ),
+                ),
           title: Text(habit.title),
           subtitle: Text(habit.progressText ?? 'Sin progreso'),
           onTap: () => close(context, habit),

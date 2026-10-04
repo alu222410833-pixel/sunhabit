@@ -14,6 +14,7 @@ import 'package:sunhabit/features/home/presentation/widgets/home_bottom_nav.dart
 import 'package:sunhabit/features/home/presentation/widgets/home_date_row.dart';
 import 'package:sunhabit/features/home/presentation/widgets/home_habit_tile.dart';
 import 'package:sunhabit/features/home/presentation/widgets/home_summary_card.dart';
+import 'package:sunhabit/features/home/presentation/widgets/reminders_list_sheet.dart';
 
 /// Pantalla principal de la aplicación.
 ///
@@ -169,14 +170,14 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (dialogContext) => CreateHabitDialog(categories: categories),
       );
       if (detailedResult != null && context.mounted) {
-        HabitsRepository().addHabit(detailedResult);
+        await HabitsRepository().addHabit(detailedResult);
         unawaited(ReminderService.instance.scheduleHabit(detailedResult));
       }
       return;
     }
 
     if (result != null && context.mounted) {
-      HabitsRepository().addHabit(result);
+      await HabitsRepository().addHabit(result);
       unawaited(ReminderService.instance.scheduleHabit(result));
     }
   }
@@ -309,7 +310,7 @@ class _HomeScreenState extends State<HomeScreen> {
             clipBehavior: Clip.none,
             children: [
               IconButton(
-                onPressed: () {},
+                onPressed: () => showRemindersListSheet(context),
                 icon: const Icon(Icons.notifications_none_rounded),
               ),
               const Positioned(
