@@ -9,6 +9,7 @@ import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/features/categories/data/category_model.dart';
 import 'package:sunhabit/features/habits/data/habit_log_model.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
+import 'package:sunhabit/features/habits/domain/habit_streak_calculator.dart';
 
 /// Resultado de intentar eliminar una categoría de forma segura.
 enum CategoryDeletionResult {
@@ -151,6 +152,48 @@ class HabitsRepository extends ChangeNotifier {
           ..sort((a, b) => a.date.compareTo(b.date)),
       );
 
+  /// Para hábitos 'Algunas veces por período': cuántos días se ha
+  /// completado dentro del período actual (semana/mes/año según
+  /// [Habit.periodType]) respecto a [Habit.timesPerPeriod].
+  ///
+  /// Devuelve `(done, goal)` o null si el hábito no es de esa frecuencia.
+  ({int done, int goal})? getPeriodProgress(Habit habit, {DateTime? date}) {
+    if (habit.frequency != 'Algunas veces por período') return null;
+    final goal = habit.timesPerPeriod ?? 1;
+    final ref = date ?? DateTime.now();
+    final periodStart = HabitStreakCalculator.periodStartOf(habit, ref);
+    final periodEnd = HabitStreakCalculator.nextPeriodStart(habit, periodStart);
+    final done = _logs
+        .where((l) =>
+            l.habitId == habit.id &&
+            l.isCompleted &&
+            !l.date.isBefore(periodStart) &&
+            l.date.isBefore(periodEnd))
+        .length;
+    return (done: done, goal: goal);
+  }
+
+  /// Texto de progreso para hábitos 'Algunas veces por período'
+  /// (ej. "2/3 esta semana"), o null si no aplica.
+  ///
+  /// Cuando [date] cae en un período distinto al actual, la etiqueta
+  /// cambia a "esa semana/mes/año".
+  String? periodProgressText(Habit habit, {DateTime? date}) {
+    final ref = date ?? DateTime.now();
+    final progress = getPeriodProgress(habit, date: ref);
+    if (progress == null) return null;
+    final isCurrentPeriod =
+        HabitStreakCalculator.periodStartOf(habit, ref).isAtSameMomentAs(
+      HabitStreakCalculator.periodStartOf(habit, DateTime.now()),
+    );
+    final label = switch (habit.periodType) {
+      'mes' => isCurrentPeriod ? 'este mes' : 'ese mes',
+      'año' => isCurrentPeriod ? 'este año' : 'ese año',
+      _ => isCurrentPeriod ? 'esta semana' : 'esa semana',
+    };
+    return '${progress.done}/${progress.goal} $label';
+  }
+
   Future<void> _load() async {
     final habitsJson = await _storage.getString(habitsKey);
     final categoriesJson = await _storage.getString(categoriesKey);
@@ -281,7 +324,19 @@ class HabitsRepository extends ChangeNotifier {
         }
       } else {
         // No hay log de hoy: resetear el estado diario.
-        if (habit.isCompleted ||
+        final isLimitHabit = habit.condition == 'Menos de' &&
+            (habit.evaluationType == HabitEvaluationType.amount ||
+                habit.evaluationType == HabitEvaluationType.timer);
+        if (isLimitHabit) {
+          // Hábito de límite/reducción: el día empieza cumplido
+          // (0 < límite) y solo "falla" si se supera la meta. Se
+          // registra el log para que cuente en rachas e historial;
+          // si luego se supera el límite, el log se actualiza a
+          // fallido.
+          _habits[i] = _blankHabitForDate(habit);
+          _logHabit(habit.id);
+          changed = true;
+        } else if (habit.isCompleted ||
             habit.current != null ||
             habit.completedChecklist != null) {
           _habits[i] = _blankHabitForDate(habit);
@@ -488,12 +543,17 @@ class HabitsRepository extends ChangeNotifier {
   Habit? getHabitById(String id) =>
       _habits.where((h) => h.id == id).firstOrNull;
 
-  void _logHabit(String id, {int? overrideCurrentValue}) {
+  void _logHabit(
+    String id, {
+    int? overrideCurrentValue,
+    bool? overrideIsCompleted,
+    DateTime? date,
+  }) {
     final habit = getHabitById(id);
     if (habit == null) return;
 
-    final today = DateTime.now();
-    final logDate = DateTime(today.year, today.month, today.day);
+    final ref = date ?? DateTime.now();
+    final logDate = DateTime(ref.year, ref.month, ref.day);
     final index = _logs.indexWhere(
       (l) => l.habitId == id && _isSameDay(l.date, logDate),
     );
@@ -501,13 +561,18 @@ class HabitsRepository extends ChangeNotifier {
     final currentValue = overrideCurrentValue ?? switch (habit.evaluationType) {
       HabitEvaluationType.amount => habit.current,
       HabitEvaluationType.yesNo => habit.yesNo == true ? 1 : 0,
+      // Temporizador: sin override se conserva la duración ya
+      // registrada en el log de hoy. Sin esto, un updateHabit o
+      // uncomplete pisaría los minutos acumulados con null.
+      HabitEvaluationType.timer =>
+        index != -1 ? _logs[index].currentValue : null,
       _ => null,
     };
 
     final newLog = HabitLog(
       habitId: id,
       date: logDate,
-      isCompleted: habit.isCompleted,
+      isCompleted: overrideIsCompleted ?? habit.isCompleted,
       currentValue: currentValue,
       completedChecklist: habit.completedChecklist != null
           ? List<String>.from(habit.completedChecklist!)
@@ -534,20 +599,48 @@ class HabitsRepository extends ChangeNotifier {
   }
 
   /// Completa un hábito de tipo cronómetro y guarda la duración real
-  /// transcurrida (en segundos) en el log del día.
-  Future<void> completeHabitWithDuration(String id, int seconds) async {
+  /// transcurrida (en segundos) en el log.
+  ///
+  /// La marca de completado respeta la `condition` del hábito: con
+  /// 'Al menos' solo se completa si los segundos alcanzan la duración
+  /// objetivo; si no se cumple, la duración se guarda igualmente como
+  /// progreso parcial.
+  ///
+  /// [date] es el día al que pertenece el registro (por defecto hoy):
+  /// un temporizador que cruza medianoche debe registrar su
+  /// cumplimiento en el día en que se inició la sesión. El estado vivo
+  /// del hábito solo se marca cuando el log corresponde a hoy.
+  Future<void> completeHabitWithDuration(
+    String id,
+    int seconds, {
+    DateTime? date,
+  }) async {
     final index = _habits.indexWhere((h) => h.id == id);
-    if (index != -1) {
-      _habits[index] = _habits[index].copyWith(isCompleted: true);
+    if (index == -1) return;
+    final habit = _habits[index];
+    final goal = habit.estimatedDuration?.inSeconds;
+    // 'Exactamente' en temporizador: la finalización automática se
+    // dispara con elapsed >= total, así que elapsed puede pasarse de
+    // la meta por 1-2 s. Se interpreta como "llegar a la meta".
+    final met = habit.isGoalMet(
+      habit.condition == 'Exactamente' && goal != null
+          ? seconds.clamp(0, goal)
+          : seconds,
+      goal,
+    );
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final logDate =
+        date == null ? today : DateTime(date.year, date.month, date.day);
+    if (_isSameDay(logDate, today)) {
+      _habits[index] = habit.copyWith(isCompleted: met);
     }
-    _logHabit(id, overrideCurrentValue: seconds);
-    await _save();
-  }
-
-  /// Guarda la duración transcurrida de un hábito tipo cronómetro sin marcarlo
-  /// como completado. Útil cuando el usuario pulsa "Finalizar" manualmente.
-  Future<void> saveHabitDuration(String id, int seconds) async {
-    _logHabit(id, overrideCurrentValue: seconds);
+    _logHabit(
+      id,
+      overrideCurrentValue: seconds,
+      overrideIsCompleted: met,
+      date: logDate,
+    );
     await _save();
   }
 
@@ -565,47 +658,47 @@ class HabitsRepository extends ChangeNotifier {
 
   Future<void> setHabitYesNo(String id, bool value) async {
     final index = _habits.indexWhere((h) => h.id == id);
-    if (index != -1) {
-      final habit = _habits[index];
-      _habits[index] = habit.copyWith(
-        yesNo: value,
-        isCompleted: value,
-      );
-    }
+    if (index == -1) return;
+    final habit = _habits[index];
+    if (habit.evaluationType != HabitEvaluationType.yesNo) return;
+    _habits[index] = habit.copyWith(
+      yesNo: value,
+      isCompleted: value,
+    );
     _logHabit(id);
     await _save();
   }
 
   Future<void> incrementHabitAmount(String id, int delta) async {
     final index = _habits.indexWhere((h) => h.id == id);
-    if (index != -1) {
-      final habit = _habits[index];
-      final currentVal = habit.current ?? 0;
-      final newVal = (currentVal + delta).clamp(0, 999999);
-      // Sin target, cualquier progreso > 0 cuenta como completado;
-      // si no, un hábito de cantidad sin objetivo jamás podría marcarse.
-      final isDone = habit.target != null ? newVal >= habit.target! : newVal > 0;
-      _habits[index] = habit.copyWith(
-        current: newVal,
-        isCompleted: isDone,
-      );
-    }
+    if (index == -1) return;
+    final habit = _habits[index];
+    if (habit.evaluationType != HabitEvaluationType.amount) return;
+    final currentVal = habit.current ?? 0;
+    final newVal = (currentVal + delta).clamp(0, 999999);
+    // `isGoalMet` aplica la condition ('Al menos'/'Menos de'/
+    // 'Exactamente'/'Libre'); sin target, cualquier progreso > 0
+    // cuenta como completado.
+    final isDone = habit.isGoalMet(newVal);
+    _habits[index] = habit.copyWith(
+      current: newVal,
+      isCompleted: isDone,
+    );
     _logHabit(id);
     await _save();
   }
 
   Future<void> setHabitAmount(String id, int amount) async {
     final index = _habits.indexWhere((h) => h.id == id);
-    if (index != -1) {
-      final habit = _habits[index];
-      final current = amount.clamp(0, 999999);
-      // Sin target, cualquier progreso > 0 cuenta como completado.
-      final isDone = habit.target != null ? current >= habit.target! : current > 0;
-      _habits[index] = habit.copyWith(
-        current: current,
-        isCompleted: isDone,
-      );
-    }
+    if (index == -1) return;
+    final habit = _habits[index];
+    if (habit.evaluationType != HabitEvaluationType.amount) return;
+    final current = amount.clamp(0, 999999);
+    final isDone = habit.isGoalMet(current);
+    _habits[index] = habit.copyWith(
+      current: current,
+      isCompleted: isDone,
+    );
     _logHabit(id);
     await _save();
   }
@@ -614,6 +707,7 @@ class HabitsRepository extends ChangeNotifier {
     final index = _habits.indexWhere((h) => h.id == id);
     if (index != -1) {
       final habit = _habits[index];
+      if (habit.evaluationType != HabitEvaluationType.checklist) return;
       final checklist = habit.checklist ?? [];
       final completed = List<String>.from(habit.completedChecklist ?? []);
       if (completed.contains(item)) {
@@ -667,8 +761,13 @@ class HabitsRepository extends ChangeNotifier {
 
   /// Devuelve el hábito con estado "en blanco" para una fecha sin log.
   Habit _blankHabitForDate(Habit habit) {
+    final isLimitHabit = habit.condition == 'Menos de' &&
+        (habit.evaluationType == HabitEvaluationType.amount ||
+            habit.evaluationType == HabitEvaluationType.timer);
     return habit.copyWith(
-      isCompleted: false,
+      // Un día sin registro para un hábito de límite significa que no
+      // se superó la meta: se considera cumplido.
+      isCompleted: isLimitHabit,
       current: habit.evaluationType == HabitEvaluationType.amount
           ? 0
           : habit.current,

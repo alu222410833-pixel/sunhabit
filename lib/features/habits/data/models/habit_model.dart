@@ -33,6 +33,9 @@ class Habit {
   final int? current; // Progreso actual (hábitos medibles)
   final int? target; // Meta a alcanzar (hábitos medibles)
   final String? unit; // Unidad de medida (min, vasos, pasos, etc.)
+  /// Condición del objetivo para hábitos de cantidad y temporizador:
+  /// 'Al menos' (por defecto), 'Menos de', 'Exactamente' o 'Libre'.
+  final String? condition;
   final bool? yesNo; // Indica si es un hábito de tipo sí/no
 
   final List<String>? checklist; // Ítems para hábitos tipo checklist
@@ -70,6 +73,7 @@ class Habit {
     this.current,
     this.target,
     this.unit,
+    this.condition,
     this.yesNo,
     this.checklist,
     this.completedChecklist,
@@ -108,6 +112,31 @@ class Habit {
       return HabitEvaluationType.amount;
     }
     return HabitEvaluationType.yesNo;
+  }
+
+  /// Evalúa si [value] satisface la [condition] del objetivo.
+  ///
+  /// [goal] es la meta contra la que se compara: el `target` de un
+  /// hábito de cantidad o la `estimatedDuration` (en segundos) de un
+  /// temporizador. Si es null se usa [target].
+  ///
+  /// - 'Al menos' (o null): `value >= goal` (sin goal → `value > 0`).
+  /// - 'Menos de': `value < goal` — hábito de límite/reducción.
+  /// - 'Exactamente': `value == goal`.
+  /// - 'Libre': cualquier progreso `> 0` cuenta.
+  bool isGoalMet(int value, [int? goal]) {
+    final t = goal ?? target;
+    switch (condition) {
+      case 'Menos de':
+        return t != null ? value < t : value > 0;
+      case 'Exactamente':
+        return t != null ? value == t : value > 0;
+      case 'Libre':
+        return value > 0;
+      case 'Al menos':
+      default:
+        return t != null ? value >= t : value > 0;
+    }
   }
 
   /// Devuelve los minutos desde medianoche (0..1439) del recordatorio más temprano
@@ -193,6 +222,7 @@ class Habit {
     int? current,
     int? target,
     String? unit,
+    String? condition,
     bool? yesNo,
     List<String>? checklist,
     List<String>? completedChecklist,
@@ -225,6 +255,7 @@ class Habit {
       current: current ?? this.current,
       target: target ?? this.target,
       unit: unit ?? this.unit,
+      condition: condition ?? this.condition,
       yesNo: yesNo ?? this.yesNo,
       checklist: checklist ?? this.checklist,
       completedChecklist: completedChecklist ?? this.completedChecklist,
@@ -279,6 +310,10 @@ class Habit {
           (yd) => yd.month == target.month && yd.day == target.day,
         );
       case 'Algunas veces por período':
+        // Días flexibles: puede cumplirse cualquier día dentro del
+        // rango de fechas. La meta es acumular `timesPerPeriod`
+        // cumplimientos por semana/mes/año (ver HabitStreakCalculator).
+        return true;
       case 'Repetir':
         final interval = repeatInterval ?? 1;
         final base = start ?? target;
@@ -307,6 +342,7 @@ class Habit {
         'current': current,
         'target': target,
         'unit': unit,
+        'condition': condition,
         'yesNo': yesNo,
         'checklist': checklist,
         'completedChecklist': completedChecklist,
@@ -350,6 +386,7 @@ class Habit {
       current: json['current'] as int?,
       target: json['target'] as int?,
       unit: json['unit'] as String?,
+      condition: json['condition'] as String?,
       yesNo: json['yesNo'] as bool?,
       checklist: (json['checklist'] as List<dynamic>?)?.cast<String>(),
       completedChecklist:

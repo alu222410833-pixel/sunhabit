@@ -83,9 +83,9 @@ class SoundSourcePicker {
   }
 
   static Future<String?> _pickAudio() async {
-    final result = await FilePicker.pickFiles(type: FileType.audio);
-    if (result.isEmpty) return null;
-    final pickedPath = result.single.path;
+    final files = await FilePicker.pickFiles(type: FileType.audio);
+    if (files.isEmpty) return null;
+    final pickedPath = files.first.path;
     if (pickedPath == null || pickedPath.isEmpty) return null;
 
     // Si ya es un archivo persistente dentro de la app, úsalo directamente.
@@ -95,9 +95,9 @@ class SoundSourcePicker {
   }
 
   static Future<String?> _pickVideoAndExtract(BuildContext context) async {
-    final result = await FilePicker.pickFiles(type: FileType.video);
-    if (result.isEmpty) return null;
-    final videoPath = result.single.path;
+    final files = await FilePicker.pickFiles(type: FileType.video);
+    if (files.isEmpty) return null;
+    final videoPath = files.first.path;
     if (videoPath == null || videoPath.isEmpty) return null;
     if (!context.mounted) return null;
 

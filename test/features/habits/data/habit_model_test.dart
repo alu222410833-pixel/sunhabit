@@ -70,6 +70,82 @@ void main() {
       expect(habit.isScheduledFor(DateTime(2026, 8, 28)), true);
       expect(habit.isScheduledFor(DateTime(2026, 8, 26)), false);
     });
+
+    test('Algunas veces por período se programa todos los días', () {
+      // Aunque tenga repeatInterval (el picker lo recoge), los días son
+      // flexibles: el hábito puede cumplirse cualquier día del período.
+      final habit = Habit(
+        id: '1',
+        title: 'Test',
+        categoryId: 'test',
+        frequency: 'Algunas veces por período',
+        timesPerPeriod: 3,
+        periodType: 'semana',
+        repeatInterval: 5,
+        startDate: DateTime(2026, 8, 25),
+      );
+
+      expect(habit.isScheduledFor(DateTime(2026, 8, 25)), true);
+      expect(habit.isScheduledFor(DateTime(2026, 8, 26)), true);
+      expect(habit.isScheduledFor(DateTime(2026, 8, 27)), true);
+      // Fuera del rango de fechas sigue sin programarse.
+      expect(habit.isScheduledFor(DateTime(2026, 8, 24)), false);
+    });
+  });
+
+  group('Habit.isGoalMet', () {
+    Habit habitWith({String? condition, int? target}) => Habit(
+          id: '1',
+          title: 'Test',
+          categoryId: 'test',
+          condition: condition,
+          target: target,
+          unit: 'min',
+        );
+
+    test('Al menos (y condición nula) exige value >= target', () {
+      final explicit = habitWith(condition: 'Al menos', target: 5);
+      expect(explicit.isGoalMet(5), true);
+      expect(explicit.isGoalMet(4), false);
+
+      final implicit = habitWith(target: 5);
+      expect(implicit.isGoalMet(5), true);
+      expect(implicit.isGoalMet(4), false);
+    });
+
+    test('Menos de exige value < target', () {
+      final habit = habitWith(condition: 'Menos de', target: 3);
+      expect(habit.isGoalMet(0), true);
+      expect(habit.isGoalMet(2), true);
+      expect(habit.isGoalMet(3), false);
+      expect(habit.isGoalMet(5), false);
+    });
+
+    test('Exactamente exige value == target', () {
+      final habit = habitWith(condition: 'Exactamente', target: 3);
+      expect(habit.isGoalMet(3), true);
+      expect(habit.isGoalMet(2), false);
+      expect(habit.isGoalMet(4), false);
+    });
+
+    test('Libre cuenta cualquier progreso > 0', () {
+      final habit = habitWith(condition: 'Libre', target: 10);
+      expect(habit.isGoalMet(0), false);
+      expect(habit.isGoalMet(1), true);
+      expect(habit.isGoalMet(50), true);
+    });
+
+    test('sin target, cualquier progreso > 0 cuenta como completado', () {
+      final habit = habitWith(condition: 'Al menos');
+      expect(habit.isGoalMet(0), false);
+      expect(habit.isGoalMet(1), true);
+    });
+
+    test('acepta una meta explícita distinta de target (temporizador)', () {
+      final habit = habitWith(condition: 'Al menos', target: 5);
+      expect(habit.isGoalMet(9, 600), false);
+      expect(habit.isGoalMet(600, 600), true);
+    });
   });
 
   group('Habit.evaluationType', () {

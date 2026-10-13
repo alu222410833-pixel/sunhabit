@@ -7,6 +7,7 @@ import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/core/theme/app_decorations.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
+import 'package:sunhabit/features/onboarding/presentation/onboarding_screen.dart';
 
 class UserProfileScreen extends StatelessWidget {
   const UserProfileScreen({super.key});
@@ -70,6 +71,15 @@ class UserProfileScreen extends StatelessWidget {
               _SettingsTile(
                 textTheme: textTheme,
                 onTap: () => context.go(AppRouter.settings),
+              ),
+              const SizedBox(height: 12),
+              _ActionCard(
+                icon: Icons.school_outlined,
+                title: 'Iniciar tutorial',
+                subtitle:
+                    'Aprende a crear hábitos y categorías con imagen, icono y sonido.',
+                textTheme: textTheme,
+                onTap: OnboardingScreen.launch,
               ),
             ],
           ),

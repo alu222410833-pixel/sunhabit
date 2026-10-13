@@ -3,6 +3,7 @@ import 'package:sunhabit/core/constants/app_constants.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/core/theme/app_decorations.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
+import 'package:sunhabit/features/habits/data/habits_repository.dart';
 import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
 
 /// Tarjeta individual para un hábito en la lista de inicio.
@@ -33,8 +34,23 @@ class HomeHabitTile extends StatelessWidget {
     final date = selectedDate ?? DateTime.now();
     final reminderText = habit.reminderTimeTextForDate(date);
 
+    // Días flexibles ('Algunas veces por período') sin registro en una
+    // fecha distinta a hoy: no son un fallo (la meta es por período),
+    // así que se muestran con un estado neutro en vez del círculo
+    // vacío de "pendiente/incumplido".
+    final now = DateTime.now();
+    final isToday = date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
+    final neutralDay = !isToday &&
+        !habit.isCompleted &&
+        habit.frequency == 'Algunas veces por período';
+
     final subtitleParts = [
-      habit.progressText,
+      // Hábitos 'Algunas veces por período' muestran el avance del
+      // período ("2/3 esta semana") en lugar del progreso diario.
+      HabitsRepository().periodProgressText(habit, date: date) ??
+          habit.progressText,
       reminderText,
     ].whereType<String>().toList();
     final subtitle = subtitleParts.isEmpty ? null : subtitleParts.join(' · ');
@@ -145,14 +161,22 @@ class HomeHabitTile extends StatelessWidget {
                               size: 18,
                             ),
                           )
-                        : Icon(
-                            Icons.circle_outlined,
-                            key: const ValueKey(false),
-                            color: theme.colorScheme.onSurface.withValues(
-                              alpha: 0.7,
-                            ),
-                            size: 27,
-                          ),
+                        : neutralDay
+                            ? Icon(
+                                Icons.remove_rounded,
+                                key: const ValueKey('neutral'),
+                                color: AppColors.textMuted,
+                                size: 22,
+                              )
+                            : Icon(
+                                Icons.circle_outlined,
+                                key: const ValueKey(false),
+                                color: theme.colorScheme.onSurface
+                                    .withValues(
+                                  alpha: 0.7,
+                                ),
+                                size: 27,
+                              ),
                   ),
                 ),
                 ),

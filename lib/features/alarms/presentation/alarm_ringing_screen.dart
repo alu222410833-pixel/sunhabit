@@ -109,13 +109,9 @@ class _AlarmRingingScreenState extends State<AlarmRingingScreen> {
 
   Future<void> _handleStopTimer() async {
     await _silenceAlarm();
-    final session = HabitExecutionService().currentSession;
-    final elapsedSeconds = session?.elapsedSeconds ?? 0;
-    final habitId = _habit?.id;
-    HabitExecutionService().stopTimer();
-    if (habitId != null && elapsedSeconds > 0) {
-      HabitsRepository().saveHabitDuration(habitId, elapsedSeconds);
-    }
+    // finishTimer evalúa la meta (completa el hábito si el tiempo se
+    // alcanzó) y registra la duración en el día en que empezó la sesión.
+    HabitExecutionService().finishTimer();
     if (mounted) {
       AppRouter.goHome(context);
     }

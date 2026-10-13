@@ -58,8 +58,13 @@ class TimerSectionState extends State<TimerSection> {
 
   void _stop() {
     final seconds = _elapsedSeconds;
+    final logDay = _svc.currentSession?.logDay;
     _svc.stopTimer();
-    HabitsRepository().completeHabitWithDuration(widget.habit.id, seconds);
+    HabitsRepository().completeHabitWithDuration(
+      widget.habit.id,
+      seconds,
+      date: logDay,
+    );
     if (mounted) {
       Navigator.of(context).pop();
     }

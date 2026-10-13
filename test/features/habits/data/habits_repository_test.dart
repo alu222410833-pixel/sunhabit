@@ -44,15 +44,26 @@ void main() {
       final repository = HabitsRepository.test(storage);
       await repository.initialize();
 
+      // El hábito '2' por defecto tiene una duración objetivo de 45 min:
+      // con condición 'Al menos' (por defecto) 123 s quedan como
+      // progreso parcial sin completar.
       repository.completeHabitWithDuration('2', 123);
 
-      final habit = repository.getHabitById('2');
+      var habit = repository.getHabitById('2');
       expect(habit, isNotNull);
-      expect(habit!.isCompleted, true);
+      expect(habit!.isCompleted, false);
 
-      final logs = repository.getHabitLogs('2');
+      var logs = repository.getHabitLogs('2');
       expect(logs, isNotEmpty);
       expect(logs.last.currentValue, 123);
+
+      // Al alcanzar la duración objetivo sí se marca completado.
+      repository.completeHabitWithDuration('2', 45 * 60);
+
+      habit = repository.getHabitById('2');
+      expect(habit!.isCompleted, true);
+      logs = repository.getHabitLogs('2');
+      expect(logs.last.currentValue, 45 * 60);
     });
 
     test('getHabitsForDate ordena los incompletos por hora y los completados al final',

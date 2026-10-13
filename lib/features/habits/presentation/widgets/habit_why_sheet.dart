@@ -59,11 +59,9 @@ class HabitWhySheet extends StatelessWidget {
           stops: const [0.0, 0.55, 1.0],
         ),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(
-          top: BorderSide(color: iconColor.withValues(alpha: 0.5), width: 1.4),
-          left: const BorderSide(color: AppColors.borderDark),
-          right: const BorderSide(color: AppColors.borderDark),
-        ),
+        // Borde uniforme: el acento neón superior se dibuja aparte con
+        // un Positioned para evitar la excepción de paint con borderRadius.
+        border: Border.all(color: AppColors.borderDark),
         boxShadow: [
           BoxShadow(
             color: iconColor.withValues(alpha: 0.16),
@@ -72,85 +70,104 @@ class HabitWhySheet extends StatelessWidget {
           ),
         ],
       ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 42,
-                    height: 4.5,
-                    decoration: BoxDecoration(
-                      color: iconColor.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(3),
-                      boxShadow: [
-                        BoxShadow(
-                          color: iconColor.withValues(alpha: 0.4),
-                          blurRadius: 8,
+      child: Stack(
+        children: [
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 42,
+                        height: 4.5,
+                        decoration: BoxDecoration(
+                          color: iconColor.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: iconColor.withValues(alpha: 0.4),
+                              blurRadius: 8,
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                _buildHeader(context, habit),
-                const SizedBox(height: 16),
-                _buildHero(habit, textTheme),
-                if (habit.whyGoal != null && habit.whyGoal!.isNotEmpty) ...[
-                  const SizedBox(height: 14),
-                  _buildGoalCard(habit, textTheme),
-                ],
-                const SizedBox(height: 18),
-                _buildActionButtons(context, habit, textTheme),
-                const SizedBox(height: 14),
-                Text(
-                  'Pequeños hábitos, grandes cambios.',
-                  textAlign: TextAlign.center,
-                  style: textTheme.bodySmall?.copyWith(
-                    color: AppColors.textMuted,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                GestureDetector(
-                  onTap: () => Navigator.of(context).pop(),
-                  child: Container(
-                    height: AppConstants.controlHeight,
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceHighest,
-                      borderRadius:
-                          BorderRadius.circular(AppConstants.cardRadius),
-                      border: Border.all(color: AppColors.borderDark),
+                    const SizedBox(height: 16),
+                    _buildHeader(context, habit),
+                    const SizedBox(height: 16),
+                    _buildHero(habit, textTheme),
+                    if (habit.whyGoal != null && habit.whyGoal!.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      _buildGoalCard(habit, textTheme),
+                    ],
+                    const SizedBox(height: 18),
+                    _buildActionButtons(context, habit, textTheme),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Pequeños hábitos, grandes cambios.',
+                      textAlign: TextAlign.center,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: AppColors.textMuted,
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
-                    alignment: Alignment.center,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.arrow_back_rounded,
-                          size: 18,
-                          color: AppColors.textPrimary,
+                    const SizedBox(height: 14),
+                    GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Container(
+                        height: AppConstants.controlHeight,
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceHighest,
+                          borderRadius:
+                              BorderRadius.circular(AppConstants.cardRadius),
+                          border: Border.all(color: AppColors.borderDark),
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Volver al hábito',
-                          style: textTheme.titleMedium?.copyWith(
-                            color: AppColors.textPrimary,
-                            fontWeight: FontWeight.w700,
-                          ),
+                        alignment: Alignment.center,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.arrow_back_rounded,
+                              size: 18,
+                              color: AppColors.textPrimary,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Volver al hábito',
+                              style: textTheme.titleMedium?.copyWith(
+                                color: AppColors.textPrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
+          // Acento neón del borde superior
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 1.4,
+            child: Container(
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.5),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

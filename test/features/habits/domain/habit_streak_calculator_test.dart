@@ -144,6 +144,109 @@ void main() {
       expect(result.best, 3);
     });
 
+    test('racha por períodos: semanas con >= N cumplimientos', () {
+      // Miércoles 14 de octubre de 2026; semana actual: 12-18 oct.
+      final reference = DateTime(2026, 10, 14);
+      final habit = Habit(
+        id: '1',
+        title: 'Test',
+        categoryId: 'health',
+        frequency: 'Algunas veces por período',
+        timesPerPeriod: 3,
+        periodType: 'semana',
+      );
+
+      List<HabitLog> logsOn(List<DateTime> dates) => dates
+          .map((d) => HabitLog(habitId: '1', date: d, isCompleted: true))
+          .toList();
+
+      final logs = <HabitLog>[
+        // Semana actual (12-18 oct): 3 cumplimientos → cumplida.
+        ...logsOn([DateTime(2026, 10, 12), DateTime(2026, 10, 13), DateTime(2026, 10, 14)]),
+        // Semana 5-11 oct: 3 → cumplida.
+        ...logsOn([DateTime(2026, 10, 5), DateTime(2026, 10, 7), DateTime(2026, 10, 9)]),
+        // Semana 28 sep-4 oct: solo 1 → fallida (rompe).
+        ...logsOn([DateTime(2026, 9, 30)]),
+        // Semana 21-27 sep: 3 → cumplida pero tras el fallo.
+        ...logsOn([DateTime(2026, 9, 21), DateTime(2026, 9, 23), DateTime(2026, 9, 25)]),
+      ];
+
+      final result = HabitStreakCalculator.calculate(
+        habit,
+        logs,
+        today: reference,
+      );
+
+      expect(result.current, 2); // semana actual + anterior
+      expect(result.best, 2);
+    });
+
+    test('racha por períodos: período en curso incompleto no rompe', () {
+      // Miércoles 14 oct: la semana actual solo lleva 1 cumplimiento
+      // (necesita 3) pero aún puede completarse → no rompe la racha.
+      final reference = DateTime(2026, 10, 14);
+      final habit = Habit(
+        id: '1',
+        title: 'Test',
+        categoryId: 'health',
+        frequency: 'Algunas veces por período',
+        timesPerPeriod: 3,
+        periodType: 'semana',
+      );
+
+      final logs = <HabitLog>[
+        // Semana actual: 1 cumplimiento (incompleta, en curso).
+        HabitLog(habitId: '1', date: DateTime(2026, 10, 12), isCompleted: true),
+        // Dos semanas anteriores cumplidas.
+        for (final d in [DateTime(2026, 10, 5), DateTime(2026, 10, 7), DateTime(2026, 10, 9)])
+          HabitLog(habitId: '1', date: d, isCompleted: true),
+        for (final d in [DateTime(2026, 9, 28), DateTime(2026, 9, 30), DateTime(2026, 10, 2)])
+          HabitLog(habitId: '1', date: d, isCompleted: true),
+      ];
+
+      final result = HabitStreakCalculator.calculate(
+        habit,
+        logs,
+        today: reference,
+      );
+
+      expect(result.current, 2); // las dos semanas anteriores
+      expect(result.best, 2);
+    });
+
+    test('racha por períodos: meses', () {
+      final reference = DateTime(2026, 10, 15);
+      final habit = Habit(
+        id: '1',
+        title: 'Test',
+        categoryId: 'health',
+        frequency: 'Algunas veces por período',
+        timesPerPeriod: 2,
+        periodType: 'mes',
+      );
+
+      final logs = <HabitLog>[
+        // Octubre en curso: 1 (incompleto).
+        HabitLog(habitId: '1', date: DateTime(2026, 10, 3), isCompleted: true),
+        // Sep, Ago, Jul: 2 cada uno → cumplidos.
+        for (final d in [DateTime(2026, 9, 5), DateTime(2026, 9, 20)])
+          HabitLog(habitId: '1', date: d, isCompleted: true),
+        for (final d in [DateTime(2026, 8, 5), DateTime(2026, 8, 20)])
+          HabitLog(habitId: '1', date: d, isCompleted: true),
+        for (final d in [DateTime(2026, 7, 5), DateTime(2026, 7, 20)])
+          HabitLog(habitId: '1', date: d, isCompleted: true),
+      ];
+
+      final result = HabitStreakCalculator.calculate(
+        habit,
+        logs,
+        today: reference,
+      );
+
+      expect(result.current, 3); // jul-ago-sep
+      expect(result.best, 3);
+    });
+
     test('logs de otros hábitos se ignoran', () {
       final today = DateTime(2026, 9, 6);
       final habit = Habit(

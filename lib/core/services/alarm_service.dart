@@ -29,6 +29,7 @@ class AlarmService {
   static const int intervalTimerNotificationId = 910002;
   static const int eyeCareNotificationId = 910003;
   static const int habitEyeCareNotificationId = 910004;
+  static const int habitTimerEndNotificationId = 910005;
 
   /// Inicializa el paquete `alarm`. Debe llamarse en `main()` antes de usar
   /// cualquier otro método.

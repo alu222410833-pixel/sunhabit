@@ -67,80 +67,104 @@ class _HabitCompletionBottomSheetState
   Widget _buildSheet(BuildContext context, Habit habit) {
     final iconColor = habit.iconColor ?? AppColors.neonGreen;
 
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Color.lerp(const Color(0xFF171B17), iconColor, 0.12)!,
-            const Color(0xFF0A0C0A),
-            const Color(0xFF0C120B),
-          ],
-          stops: const [0.0, 0.55, 1.0],
-        ),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(
-          top: BorderSide(color: iconColor.withValues(alpha: 0.5), width: 1.4),
-          left: const BorderSide(color: AppColors.borderDark),
-          right: const BorderSide(color: AppColors.borderDark),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: iconColor.withValues(alpha: 0.16),
-            blurRadius: 26,
-            offset: const Offset(0, -6),
+    // Dentro de un DraggableScrollableSheet el hijo debe ser un
+    // ListView con el scrollController del builder (patrón canónico):
+    // un SingleChildScrollView + Column(min) renderizaba el panel
+    // vacío.
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.55,
+      minChildSize: 0.35,
+      maxChildSize: 0.95,
+      snap: true,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Color.lerp(const Color(0xFF171B17), iconColor, 0.12)!,
+                const Color(0xFF0A0C0A),
+                const Color(0xFF0C120B),
+              ],
+              stops: const [0.0, 0.55, 1.0],
+            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            // Un Border con lados de colores distintos NO se puede
+            // pintar junto a borderRadius (excepción en paint → el
+            // contenido del sheet nunca se dibujaba). El marco va
+            // uniforme y el acento neón superior se dibuja aparte.
+            border: Border.all(color: AppColors.borderDark),
+            boxShadow: [
+              BoxShadow(
+                color: iconColor.withValues(alpha: 0.16),
+                blurRadius: 26,
+                offset: const Offset(0, -6),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+          child: SafeArea(
+            child: Stack(
               children: [
-                Center(
-                  child: Container(
-                    width: 42,
-                    height: 4.5,
-                    decoration: BoxDecoration(
-                      color: iconColor.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(3),
-                      boxShadow: [
-                        BoxShadow(
-                          color: iconColor.withValues(alpha: 0.4),
-                          blurRadius: 8,
+                ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 42,
+                        height: 4.5,
+                        decoration: BoxDecoration(
+                          color: iconColor.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: iconColor.withValues(alpha: 0.4),
+                              blurRadius: 8,
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
+                    const SizedBox(height: 16),
+                    _buildHeader(habit, iconColor),
+                    const SizedBox(height: 14),
+                    Container(
+                      height: 1,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            iconColor.withValues(alpha: 0.55),
+                            iconColor.withValues(alpha: 0.05),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    _buildBody(habit),
+                    const SizedBox(height: 16),
+                    _buildWhyEntry(context, habit),
+                    const SizedBox(height: 6),
+                  ],
+                ),
+                // Acento neón del borde superior (antes era Border.top,
+                // imposible de pintar con borderRadius cuando los otros
+                // lados tienen otro color).
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: 1.4,
+                  child: Container(
+                    color: iconColor.withValues(alpha: 0.5),
                   ),
                 ),
-                const SizedBox(height: 16),
-                _buildHeader(habit, iconColor),
-                const SizedBox(height: 14),
-                Container(
-                  height: 1,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        iconColor.withValues(alpha: 0.55),
-                        iconColor.withValues(alpha: 0.05),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                _buildBody(habit),
-                const SizedBox(height: 16),
-                _buildWhyEntry(context, habit),
-                const SizedBox(height: 6),
               ],
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -222,8 +246,10 @@ class _HabitCompletionBottomSheetState
                 color: AppColors.star.withValues(alpha: 0.12),
               ),
               alignment: Alignment.center,
-              child: const Icon(
-                Icons.lightbulb_outline_rounded,
+              child: Icon(
+                habit.hasWhy
+                    ? Icons.lightbulb_outline_rounded
+                    : Icons.add_rounded,
                 color: AppColors.star,
                 size: 20,
               ),
@@ -234,14 +260,16 @@ class _HabitCompletionBottomSheetState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '¿Por qué lo haces?',
+                    habit.hasWhy
+                        ? '¿Por qué lo haces?'
+                        : 'Añade tu motivación',
                     style: textTheme.titleSmall,
                   ),
                   const SizedBox(height: 2),
                   Text(
                     habit.hasWhy
                         ? 'Toca para ver tu motivación.'
-                        : 'Recuerda tu meta y mantén la motivación.',
+                        : 'Ponle una frase e imagen a tu meta.',
                     style: textTheme.bodySmall?.copyWith(
                       color: AppColors.textSecondary,
                     ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sunhabit/features/categories/data/category_model.dart';
+import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
 
 import '../helpers/fake_storage_service.dart';
@@ -79,6 +80,51 @@ void main() {
       final guitarCategory = targetRepo.getCategoryById('guitar');
       expect(guitarCategory, isNotNull);
       expect(guitarCategory!.name, 'Guitarra');
+    });
+
+    test('Export and restore preserves "Mi porqué" fields', () async {
+      final sourceStorage = FakeStorageService();
+      final sourceRepo = HabitsRepository.test(sourceStorage);
+      await sourceRepo.initialize();
+
+      await sourceRepo.addHabit(
+        Habit(
+          id: 'why_test',
+          title: 'Meditar',
+          categoryId: 'health',
+          whyPhrase: 'La calma es mi superpoder',
+          whyGoal: 'Ser constante 30 días',
+          whyImagePath: '/documents/images/why.png',
+        ),
+      );
+
+      // Las claves del backup son el JSON crudo del storage: copiarlas
+      // equivale a lo que hace BackupService.export/import.
+      final habitsJson =
+          await sourceStorage.getString(HabitsRepository.habitsKey) ?? '[]';
+      final categoriesJson =
+          await sourceStorage.getString(HabitsRepository.categoriesKey) ??
+              '[]';
+      final logsJson =
+          await sourceStorage.getString(HabitsRepository.logsKey) ?? '[]';
+
+      final targetStorage = FakeStorageService();
+      await targetStorage.setString(HabitsRepository.habitsKey, habitsJson);
+      await targetStorage.setString(
+        HabitsRepository.categoriesKey,
+        categoriesJson,
+      );
+      await targetStorage.setString(HabitsRepository.logsKey, logsJson);
+
+      final targetRepo = HabitsRepository.test(targetStorage);
+      await targetRepo.initialize();
+
+      final habit = targetRepo.getHabitById('why_test');
+      expect(habit, isNotNull);
+      expect(habit!.whyPhrase, 'La calma es mi superpoder');
+      expect(habit.whyGoal, 'Ser constante 30 días');
+      expect(habit.whyImagePath, '/documents/images/why.png');
+      expect(habit.hasWhy, isTrue);
     });
   });
 }

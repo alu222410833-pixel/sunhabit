@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -14,6 +14,7 @@ import 'package:sunhabit/core/services/habit_execution_service.dart';
 import 'package:sunhabit/core/utils/stable_hash.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
+import 'package:sunhabit/features/habits/presentation/habit_completion_bottom_sheet/habit_completion_bottom_sheet.dart';
 import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
 
 /// Maneja las acciones de notificación cuando la app está terminada o en background.
@@ -302,8 +303,10 @@ class NotificationService {
     if (habit == null) return;
 
     final at = DateTime.now().add(Duration(minutes: minutes));
-    final snoozeId =
-        (stableHash(habit.id) + at.minute + minutes) & 0x7FFFFFFF;
+    // ID fijo por hábito: un snooze nuevo reemplaza al anterior (solo
+    // el último pospuesto queda pendiente) y se puede cancelar de
+    // forma determinista.
+    final snoozeId = stableHash('${habit.id}_snooze') & 0x7FFFFFFF;
     await schedule(id: snoozeId, at: at, habit: habit);
   }
 
@@ -404,13 +407,9 @@ class NotificationService {
   static void _onNotificationTapped(NotificationResponse response) {
     switch (response.actionId) {
       case 'timer_pause':
-        HabitExecutionService().pauseTimer();
-        return;
       case 'timer_resume':
-        HabitExecutionService().resumeTimer();
-        return;
       case 'timer_finish':
-        HabitExecutionService().finishTimer();
+        unawaited(_handleTimerAction(response.actionId!));
         return;
     }
 
@@ -420,42 +419,136 @@ class NotificationService {
     final habit = HabitsRepository().getHabitById(habitId);
     if (habit == null) return;
 
+    String? feedbackMessage;
+
     switch (response.actionId) {
       case 'action_yes':
         HabitsRepository().setHabitYesNo(habitId, true);
+        feedbackMessage = '✓ "${habit.title}" marcado como completado';
         break;
       case 'action_no':
         HabitsRepository().setHabitYesNo(habitId, false);
+        feedbackMessage = '✗ "${habit.title}" marcado como no completado';
         break;
       case 'action_add_amount':
         HabitsRepository().incrementHabitAmount(habitId, 1);
+        feedbackMessage = '+1 "${habit.title}"';
         break;
       case 'action_input_amount':
         if (response.input != null && response.input!.trim().isNotEmpty) {
           final amount = int.tryParse(response.input!.trim());
           if (amount != null && amount > 0) {
             HabitsRepository().incrementHabitAmount(habitId, amount);
+            feedbackMessage = '+$amount "${habit.title}"';
           }
         }
         break;
       case 'action_snooze_10':
         snoozeHabit(habitId, 10);
+        feedbackMessage = '⏰ "${habit.title}" pospuesto 10 min';
         break;
       case 'action_timer_start':
         HabitExecutionService().startTimer(habit);
         _openAlarmScreen(habit);
-        break;
+        return;
       case 'action_view_checklist':
       case 'action_open':
       default:
-        _openAlarmScreen(habit);
-        break;
+        // Las notificaciones abren la pantalla de ejecución del hábito,
+        // no la pantalla de alarma. La pantalla de alarma solo se abre
+        // cuando una alarma real está sonando.
+        _openHabitExecutionScreen(habit);
+        return;
+    }
+
+    // Mostrar feedback visual si la app está en foreground
+    if (feedbackMessage != null) {
+      _showFeedback(feedbackMessage);
+    }
+  }
+
+  /// Muestra un snackbar con feedback de la acción ejecutada.
+  /// Solo funciona si la app está en foreground y hay un Scaffold disponible.
+  static void _showFeedback(String message) {
+    try {
+      final context = AppRouter.router.routerDelegate.navigatorKey.currentContext;
+      if (context == null) return;
+
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+            content: Text(message),
+          ),
+        );
+    } catch (e) {
+      debugPrint('[NotificationService] Error showing feedback: $e');
     }
   }
 
   static void _openAlarmScreen(Habit habit) {
     final fakeSettings = AlarmService.instance.buildFakeAlarmSettings(habit);
     AppRouter.router.push(AppRouter.alarm, extra: fakeSettings);
+  }
+
+  /// Abre la pantalla de registro del hábito (cantidad, checklist,
+  /// temporizador, sí/no) — el mismo sheet que se abre al tocar el
+  /// hábito en Inicio.
+  static void _openHabitExecutionScreen(Habit habit) {
+    AppRouter.router.go('/');
+    // La navegación necesita un frame para montar el Navigator; si el
+    // contexto aún no existe (arranque en frío) se reintenta una vez.
+    void open() {
+      final ctx =
+          AppRouter.router.routerDelegate.navigatorKey.currentContext;
+      if (ctx == null) {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          final retryCtx =
+              AppRouter.router.routerDelegate.navigatorKey.currentContext;
+          if (retryCtx == null || !retryCtx.mounted) return;
+          _showHabitSheet(retryCtx, habit);
+        });
+        return;
+      }
+      if (!ctx.mounted) return;
+      _showHabitSheet(ctx, habit);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => open());
+  }
+
+  static void _showHabitSheet(BuildContext context, Habit habit) {
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => HabitCompletionBottomSheet(habitId: habit.id),
+    );
+  }
+
+  /// Acciones del temporizador desde la notificación en foreground.
+  ///
+  /// Si la acción llega en un arranque en frío, la sesión aún no está en
+  /// memoria y llamar a pause/resume/finish la tragaría en silencio: la
+  /// notificación seguiría contando aunque el usuario pulsó "Pausar".
+  /// Se restaura la sesión primero (no-op si ya hay una viva).
+  static Future<void> _handleTimerAction(String actionId) async {
+    await HabitExecutionService().restoreSession();
+    switch (actionId) {
+      case 'timer_pause':
+        HabitExecutionService().pauseTimer();
+        break;
+      case 'timer_resume':
+        HabitExecutionService().resumeTimer();
+        break;
+      case 'timer_finish':
+        HabitExecutionService().finishTimer();
+        break;
+    }
   }
 
   // ---- Helpers ----
@@ -517,33 +610,19 @@ class NotificationService {
           ),
         ];
       case HabitEvaluationType.amount:
-        final unitStr = habit.unit != null ? ' ${habit.unit}' : '';
-        return [
+        // Solo acciones de navegación: registrar cantidades desde la
+        // notificación se eliminó ('+1'/'Escribir' eran poco prácticos).
+        // 'Abrir' lleva a la pantalla de ejecución del hábito.
+        // Los handlers action_add_amount/action_input_amount se mantienen
+        // para notificaciones programadas antes de este cambio.
+        return const [
           AndroidNotificationAction(
-            'action_add_amount',
-            '+1$unitStr',
-            showsUserInterface: false,
-            cancelNotification: true,
-          ),
-          AndroidNotificationAction(
-            'action_input_amount',
-            '✍ Escribir',
-            showsUserInterface: false,
-            cancelNotification: true,
-            allowGeneratedReplies: true,
-            inputs: [
-              AndroidNotificationActionInput(
-                label: 'Ingresar cantidad${unitStr.isNotEmpty ? " en$unitStr" : ""}',
-              ),
-            ],
-          ),
-          const AndroidNotificationAction(
             'action_open',
             '📝 Abrir',
             showsUserInterface: true,
             cancelNotification: true,
           ),
-          const AndroidNotificationAction(
+          AndroidNotificationAction(
             'action_snooze_10',
             '⏰ Posponer 10m',
             showsUserInterface: false,

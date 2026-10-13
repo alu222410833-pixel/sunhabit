@@ -105,6 +105,11 @@ class _HabitCalendarSheetState extends State<_HabitCalendarSheet> {
                   children: [
                     _LegendDot(color: widget.iconColor, label: 'Completado'),
                     _LegendDot(color: AppColors.textMuted, label: 'No completado'),
+                    if (widget.habit.frequency == 'Algunas veces por período')
+                      _LegendDot(
+                        color: AppColors.textMuted.withValues(alpha: 0.45),
+                        label: 'Día flexible',
+                      ),
                     _LegendDot(color: AppColors.gold, label: 'Pendiente'),
                   ],
                 ),
@@ -129,6 +134,11 @@ class _HabitCalendarSheetState extends State<_HabitCalendarSheet> {
     );
 
     if (log != null && log.isCompleted) return _CalendarCellStatus.completed;
+    // 'Algunas veces por período' tiene días flexibles: un día sin
+    // log no es un fallo (la meta se evalúa por período completo).
+    if (widget.habit.frequency == 'Algunas veces por período') {
+      return _CalendarCellStatus.flexible;
+    }
     return _CalendarCellStatus.notCompleted;
   }
 
@@ -166,7 +176,7 @@ class _HabitCalendarSheetState extends State<_HabitCalendarSheet> {
       a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
-enum _CalendarCellStatus { completed, notCompleted, pending, empty }
+enum _CalendarCellStatus { completed, notCompleted, flexible, pending, empty }
 
 class _CalendarDayCell extends StatelessWidget {
   final DateTime date;
@@ -197,6 +207,8 @@ class _CalendarDayCell extends StatelessWidget {
     final (color, icon) = switch (status) {
       _CalendarCellStatus.completed => (iconColor, Icons.check_rounded),
       _CalendarCellStatus.notCompleted => (AppColors.textMuted, null),
+      _CalendarCellStatus.flexible =>
+        (AppColors.textMuted.withValues(alpha: 0.45), Icons.remove_rounded),
       _CalendarCellStatus.pending => (AppColors.gold, null),
       _CalendarCellStatus.empty => (AppColors.textMuted, null),
     };

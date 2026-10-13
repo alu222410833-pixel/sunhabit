@@ -134,6 +134,8 @@ class _CreateHabitDialogState extends State<CreateHabitDialog> {
     _target = h.target ?? 1;
     _targetController.text = _target.toString();
     _unit = h.unit ?? 'Unidades';
+    _condition = h.condition ?? 'Al menos';
+    _timerCondition = h.condition ?? 'Al menos';
     _timerHours = h.estimatedDuration?.inHours ?? 0;
     _timerMinutes = (h.estimatedDuration?.inMinutes ?? 10) % 60;
     _timerSeconds = (h.estimatedDuration?.inSeconds ?? 0) % 60;
@@ -208,6 +210,9 @@ class _CreateHabitDialogState extends State<CreateHabitDialog> {
       current: isAmount ? (initial?.current ?? 0) : null,
       target: isAmount ? _target : null,
       unit: isAmount ? _unit : null,
+      condition: isAmount
+          ? _condition
+          : (isTimer ? _timerCondition : null),
       checklist: isChecklist && _checklistItems.isNotEmpty
           ? List.from(_checklistItems)
           : null,
@@ -279,8 +284,10 @@ class _CreateHabitDialogState extends State<CreateHabitDialog> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
-            SizedBox(
-              height: 400,
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.65,
+              ),
               child: PageView(
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),

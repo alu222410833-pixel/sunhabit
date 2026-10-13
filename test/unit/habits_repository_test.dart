@@ -240,4 +240,97 @@ void main() {
       expect(repo.getHabitById('same_day')!.isCompleted, true);
     });
   });
+
+  group('HabitsRepository conditions y temporizadores', () {
+    test('Menos de empieza el día cumplido y falla al superar el límite',
+        () async {
+      final repo = HabitsRepository();
+      await repo.addHabit(
+        Habit(
+          id: 'limit_habit',
+          title: 'Café',
+          categoryId: 'health',
+          current: 0,
+          target: 3,
+          unit: 'tazas',
+          condition: 'Menos de',
+        ),
+      );
+      // El reset diario marca los hábitos de límite como cumplidos y
+      // registra el log (0 < límite = éxito por defecto).
+      await repo.initialize();
+
+      var habit = repo.getHabitById('limit_habit')!;
+      expect(habit.isCompleted, true);
+      var logs = repo.getHabitLogs('limit_habit');
+      expect(logs.last.isCompleted, true);
+      expect(logs.last.currentValue, 0);
+
+      // Alcanzar el límite marca el día como fallido.
+      await repo.incrementHabitAmount('limit_habit', 3);
+      habit = repo.getHabitById('limit_habit')!;
+      expect(habit.current, 3);
+      expect(habit.isCompleted, false);
+      logs = repo.getHabitLogs('limit_habit');
+      expect(logs.last.isCompleted, false);
+    });
+
+    test('la duración del temporizador se conserva tras editar/descompletar',
+        () async {
+      final repo = HabitsRepository();
+      await repo.addHabit(
+        Habit(
+          id: 'timer_keep',
+          title: 'Timer',
+          categoryId: 'health',
+          estimatedDuration: const Duration(minutes: 10),
+        ),
+      );
+      await repo.completeHabitWithDuration('timer_keep', 600);
+      var logs = repo.getHabitLogs('timer_keep');
+      expect(logs.last.currentValue, 600);
+
+      // Editar el hábito no debe borrar la duración registrada.
+      final habit = repo.getHabitById('timer_keep')!;
+      await repo.updateHabit(habit.copyWith(title: 'Timer editado'));
+      logs = repo.getHabitLogs('timer_keep');
+      expect(logs.last.currentValue, 600);
+
+      // Des-completar tampoco (solo cambia isCompleted).
+      await repo.uncompleteHabit('timer_keep');
+      logs = repo.getHabitLogs('timer_keep');
+      expect(logs.last.currentValue, 600);
+      expect(logs.last.isCompleted, false);
+    });
+
+    test('completeHabitWithDuration registra el log en la fecha indicada',
+        () async {
+      final repo = HabitsRepository();
+      await repo.addHabit(
+        Habit(
+          id: 'timer_midnight',
+          title: 'Timer noche',
+          categoryId: 'health',
+          estimatedDuration: const Duration(minutes: 30),
+        ),
+      );
+      final yesterday = DateTime.now().subtract(const Duration(days: 1));
+      await repo.completeHabitWithDuration(
+        'timer_midnight',
+        1800,
+        date: yesterday,
+      );
+
+      // El estado vivo no se marca: el cumplimiento pertenece a ayer.
+      final habit = repo.getHabitById('timer_midnight')!;
+      expect(habit.isCompleted, false);
+
+      final logs = repo.getHabitLogs('timer_midnight');
+      expect(logs.last.isCompleted, true);
+      expect(logs.last.currentValue, 1800);
+      expect(logs.last.date.year, yesterday.year);
+      expect(logs.last.date.month, yesterday.month);
+      expect(logs.last.date.day, yesterday.day);
+    });
+  });
 }

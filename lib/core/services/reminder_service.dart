@@ -2,6 +2,7 @@ import 'package:alarm/alarm.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
+import 'package:sunhabit/core/services/habit_execution_service.dart';
 import 'package:sunhabit/core/services/notification_service.dart';
 import 'package:sunhabit/core/utils/stable_hash.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
@@ -24,14 +25,37 @@ class ReminderService {
 
   static const int scheduleRangeDays = 14;
 
+  /// Cuántos días hacia adelante se escanea buscando la próxima
+  /// ocurrencia fuera de la ventana rodante, para recordatorios de
+  /// ciclo largo (anual, mensual o intervalos > [scheduleRangeDays]).
+  /// Sin esto, un recordatorio que cae más allá de 14 días nunca se
+  /// programaba si el usuario no abría la app a tiempo.
+  static const int longRangeScanDays = 400;
+
+  /// Clave estable que identifica el CONTENIDO de un recordatorio,
+  /// independiente de su posición en `habit.reminders`.
+  ///
+  /// Antes los IDs derivaban del índice en la lista: borrar o reordenar
+  /// recordatorios cambiaba la identidad de los demás y podía dejar
+  /// programaciones huérfanas si alguna ruta olvidaba cancelar con el
+  /// estado anterior. Dos recordatorios con contenido idéntico
+  /// comparten ID — son duplicados funcionales de todos modos.
+  String _reminderKey(Reminder reminder) {
+    final days =
+        reminder.weekDays?.map((b) => b ? '1' : '0').join() ?? '';
+    return '${reminder.type}_${reminder.hour}_${reminder.minute}'
+        '_${reminder.soundPath ?? ''}_${reminder.audioStartSeconds ?? ''}'
+        '_${reminder.audioDurationSeconds ?? ''}_$days';
+  }
+
   /// Genera un ID único y estable para un recordatorio de un hábito en una
   /// fecha concreta. Se usa tanto para notificaciones como para alarmas.
   ///
   /// Usa [stableHash] (FNV-1a) en lugar de `String.hashCode`, que no es
   /// estable entre ejecuciones de la app y dejaba programaciones
   /// imposibles de cancelar (alarmas fantasma/duplicadas).
-  int idFor(Habit habit, int reminderIndex, DateTime date) {
-    final raw = '${habit.id}_$reminderIndex'
+  int idFor(Habit habit, Reminder reminder, DateTime date) {
+    final raw = '${habit.id}_${_reminderKey(reminder)}'
         '_${date.year}${date.month.toString().padLeft(2, '0')}'
         '${date.day.toString().padLeft(2, '0')}';
     return stableHash(raw) & 0x7FFFFFFF;
@@ -42,9 +66,40 @@ class ReminderService {
   /// Se usa cuando la frecuencia del hábito permite alarmas que se repiten
   /// cada 7 días (una por día de la semana activo). El `_w` distingue el ID
   /// semanal del ID diario generado por [idFor].
-  int idForWeekday(Habit habit, int reminderIndex, int weekday) {
-    final raw = '${habit.id}_${reminderIndex}_w$weekday';
+  int idForWeekday(Habit habit, Reminder reminder, int weekday) {
+    final raw = '${habit.id}_${_reminderKey(reminder)}_w$weekday';
     return stableHash(raw) & 0x7FFFFFFF;
+  }
+
+  /// Indica si un recordatorio con `weekDays` aplica en [date].
+  /// Sin `weekDays` (o lista vacía) aplica a cualquier día programado.
+  bool _reminderAppliesOnDate(Reminder reminder, DateTime date) {
+    final days = reminder.weekDays;
+    if (days == null || days.isEmpty) return true;
+    final index = date.weekday - 1;
+    return index >= 0 && index < days.length && days[index];
+  }
+
+  /// Primera fecha programable DESPUÉS de la ventana rodante
+  /// ([scheduleRangeDays] días), escaneando hasta [longRangeScanDays].
+  ///
+  /// Red de seguridad para recordatorios de ciclo largo: aunque el
+  /// usuario no abra la app dentro de la ventana, la próxima ocurrencia
+  /// lejana queda programada en el sistema. Devuelve `null` si el
+  /// hábito no tiene más ocurrencias (p. ej. `endDate` alcanzada).
+  DateTime? _nextFarOccurrence(
+      Habit habit, Reminder reminder, DateTime now) {
+    final end = habit.endDate;
+    final endDay =
+        end == null ? null : DateTime(end.year, end.month, end.day);
+    for (int d = scheduleRangeDays; d <= longRangeScanDays; d++) {
+      final date = now.add(Duration(days: d));
+      if (endDay != null && date.isAfter(endDay)) break;
+      if (!habit.isScheduledFor(date)) continue;
+      if (!_reminderAppliesOnDate(reminder, date)) continue;
+      return date;
+    }
+    return null;
   }
 
   /// Devuelve `true` si la frecuencia del hábito es compatible con alarmas
@@ -57,7 +112,7 @@ class ReminderService {
   ///
   /// Para frecuencias más complejas (días del mes, repetir cada X días,
   /// fechas del año) se usa la ventana rodante de [scheduleRangeDays].
-  bool _supportsWeeklyAlarms(Habit habit) {
+  bool supportsWeeklyAlarms(Habit habit) {
     return habit.frequency == null ||
         habit.frequency == 'Todos los días' ||
         habit.frequency == 'Días exactos de la semana';
@@ -115,7 +170,7 @@ class ReminderService {
     debugPrint('[ReminderService] scheduleHabit "${habit.title}" reminders=${habit.reminders.length}');
     await cancelHabit(habit);
     final now = DateTime.now();
-    final useWeekly = _supportsWeeklyAlarms(habit);
+    final useWeekly = supportsWeeklyAlarms(habit);
 
     for (int i = 0; i < habit.reminders.length; i++) {
       final reminder = habit.reminders[i];
@@ -132,7 +187,7 @@ class ReminderService {
           final at = _nextDateWithWeekday(now, weekday, reminder);
           if (!habit.isScheduledFor(at)) continue;
 
-          final id = idForWeekday(habit, i, weekday);
+          final id = idForWeekday(habit, reminder, weekday);
           debugPrint('[ReminderService] scheduling weekly id=$id weekday=$weekday at=$at');
           await _scheduleOne(
               id: id,
@@ -145,15 +200,7 @@ class ReminderService {
         for (int d = 0; d < scheduleRangeDays; d++) {
           final date = now.add(Duration(days: d));
           if (!habit.isScheduledFor(date)) continue;
-
-          if (reminder.weekDays != null && reminder.weekDays!.isNotEmpty) {
-            final index = date.weekday - 1;
-            if (index < 0 ||
-                index >= reminder.weekDays!.length ||
-                !reminder.weekDays![index]) {
-              continue;
-            }
-          }
+          if (!_reminderAppliesOnDate(reminder, date)) continue;
 
           final at = DateTime(
             date.year,
@@ -167,7 +214,7 @@ class ReminderService {
             continue;
           }
 
-          final id = idFor(habit, i, date);
+          final id = idFor(habit, reminder, date);
           debugPrint('[ReminderService] scheduling id=$id at=$at');
           await _scheduleOne(
               id: id,
@@ -175,6 +222,26 @@ class ReminderService {
               reminder: reminder,
               habit: habit,
               reminderIndex: i);
+        }
+
+        // Red de seguridad para ciclos largos: programar también la
+        // primera ocurrencia más allá de la ventana (anual, mensual o
+        // intervalos > scheduleRangeDays), para que suene aunque la
+        // app no se abra a tiempo.
+        final far = _nextFarOccurrence(habit, reminder, now);
+        if (far != null) {
+          final at = DateTime(far.year, far.month, far.day,
+              reminder.hour, reminder.minute);
+          if (!at.isBefore(now)) {
+            final id = idFor(habit, reminder, far);
+            debugPrint('[ReminderService] scheduling far id=$id at=$at');
+            await _scheduleOne(
+                id: id,
+                at: at,
+                reminder: reminder,
+                habit: habit,
+                reminderIndex: i);
+          }
         }
       }
     }
@@ -198,7 +265,7 @@ class ReminderService {
     final now = DateTime.now();
     for (final habit in habits) {
       if (habit.reminders.isEmpty) continue;
-      final useWeekly = _supportsWeeklyAlarms(habit);
+      final useWeekly = supportsWeeklyAlarms(habit);
       for (int i = 0; i < habit.reminders.length; i++) {
         final reminder = habit.reminders[i];
 
@@ -213,7 +280,7 @@ class ReminderService {
             final at = _nextDateWithWeekday(now, weekday, reminder);
             if (!habit.isScheduledFor(at)) continue;
 
-            final id = idForWeekday(habit, i, weekday);
+            final id = idForWeekday(habit, reminder, weekday);
             if (await _scheduleOne(
                 id: id,
                 at: at,
@@ -227,15 +294,7 @@ class ReminderService {
           for (int d = 0; d < scheduleRangeDays; d++) {
             final date = now.add(Duration(days: d));
             if (!habit.isScheduledFor(date)) continue;
-
-            if (reminder.weekDays != null && reminder.weekDays!.isNotEmpty) {
-              final index = date.weekday - 1;
-              if (index < 0 ||
-                  index >= reminder.weekDays!.length ||
-                  !reminder.weekDays![index]) {
-                continue;
-              }
-            }
+            if (!_reminderAppliesOnDate(reminder, date)) continue;
 
             final at = DateTime(
               date.year,
@@ -246,7 +305,7 @@ class ReminderService {
             );
             if (at.isBefore(now)) continue;
 
-            final id = idFor(habit, i, date);
+            final id = idFor(habit, reminder, date);
             if (await _scheduleOne(
                 id: id,
                 at: at,
@@ -254,6 +313,24 @@ class ReminderService {
                 habit: habit,
                 reminderIndex: i)) {
               scheduled++;
+            }
+          }
+
+          // Igual que en scheduleHabit: programar la primera
+          // ocurrencia más allá de la ventana para ciclos largos.
+          final far = _nextFarOccurrence(habit, reminder, now);
+          if (far != null) {
+            final at = DateTime(far.year, far.month, far.day,
+                reminder.hour, reminder.minute);
+            if (!at.isBefore(now)) {
+              if (await _scheduleOne(
+                  id: idFor(habit, reminder, far),
+                  at: at,
+                  reminder: reminder,
+                  habit: habit,
+                  reminderIndex: i)) {
+                scheduled++;
+              }
             }
           }
         }
@@ -273,6 +350,9 @@ class ReminderService {
   Future<int> rescheduleAllFromScratch() async {
     await Alarm.stopAll();
     await NotificationService.cancelAll();
+    // El wipe también borra la notificación persistente del
+    // temporizador en ejecución: hay que repintarla si hay sesión.
+    HabitExecutionService().resyncActiveNotification();
     return scheduleAllHabits();
   }
 
@@ -296,6 +376,9 @@ class ReminderService {
     if (prefs.getBool(_stableIdsMigrationKey) ?? false) return;
     await Alarm.stopAll();
     await NotificationService.cancelAll();
+    // Igual que en rescheduleAllFromScratch: repintar la notificación
+    // del temporizador si había una sesión activa durante el wipe.
+    HabitExecutionService().resyncActiveNotification();
     await prefs.setBool(_stableIdsMigrationKey, true);
     debugPrint('[ReminderService] migración a IDs estables ejecutada');
   }
@@ -313,14 +396,24 @@ class ReminderService {
   Future<void> cancelHabit(Habit habit) async {
     final now = DateTime.now();
     for (int i = 0; i < habit.reminders.length; i++) {
+      final reminder = habit.reminders[i];
       for (int weekday = 0; weekday < 7; weekday++) {
-        await _safeStop(idForWeekday(habit, i, weekday));
-        await _safeCancelNotification(idForWeekday(habit, i, weekday));
+        await _safeStop(idForWeekday(habit, reminder, weekday));
+        await _safeCancelNotification(
+            idForWeekday(habit, reminder, weekday));
       }
       for (int d = 0; d < scheduleRangeDays; d++) {
         final date = now.add(Duration(days: d));
-        await _safeStop(idFor(habit, i, date));
-        await _safeCancelNotification(idFor(habit, i, date));
+        await _safeStop(idFor(habit, reminder, date));
+        await _safeCancelNotification(idFor(habit, reminder, date));
+      }
+      // Cancelar también la ocurrencia lejana programada como red de
+      // seguridad para ciclos largos.
+      final far = _nextFarOccurrence(habit, reminder, now);
+      if (far != null) {
+        final farId = idFor(habit, reminder, far);
+        await _safeStop(farId);
+        await _safeCancelNotification(farId);
       }
     }
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sunhabit/core/constants/app_constants.dart';
@@ -195,21 +197,9 @@ class _HabitsScreenState extends State<HabitsScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            GestureDetector(
+                            _HabitsTitle(
                               onTap: _openCategoriesMenu,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text('Hábitos',
-                                      style: textTheme.displayLarge),
-                                  const SizedBox(width: 6),
-                                  const Icon(
-                                    Icons.keyboard_arrow_down_rounded,
-                                    color: AppColors.neonGreen,
-                                    size: 28,
-                                  ),
-                                ],
-                              ),
+                              style: textTheme.displayLarge,
                             ),
                             const SizedBox(height: 4),
                             Text.rich(
@@ -389,6 +379,95 @@ class _HabitsScreenState extends State<HabitsScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Título «Hábitos ▾» que abre el menú de categorías.
+///
+/// Como un texto estático no parece pulsable, cada ~4 s la palabra
+/// «Hábitos» se desliza hacia arriba y aparece «Categorías» (en color
+/// neón), pista visual de que ahí dentro están las categorías.
+class _HabitsTitle extends StatefulWidget {
+  final VoidCallback onTap;
+  final TextStyle? style;
+
+  const _HabitsTitle({required this.onTap, required this.style});
+
+  @override
+  State<_HabitsTitle> createState() => _HabitsTitleState();
+}
+
+class _HabitsTitleState extends State<_HabitsTitle> {
+  Timer? _timer;
+  bool _showCategories = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) setState(() => _showCategories = !_showCategories);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRect(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              transitionBuilder: (child, animation) {
+                // El entrante sube desde abajo (0,1 → 0); el saliente
+                // sale hacia arriba (0 → 0,-1). Su animation corre 1→0,
+                // por eso el tween va de -1 a 0.
+                final currentKey = _showCategories ? 'cat' : 'hab';
+                final isIncoming =
+                    (child.key as ValueKey<String>).value == currentKey;
+                final position = Tween<Offset>(
+                  begin: isIncoming
+                      ? const Offset(0, 1)
+                      : const Offset(0, -1),
+                  end: Offset.zero,
+                ).animate(animation);
+                return ClipRect(
+                  child: SlideTransition(
+                    position: position,
+                    child: FadeTransition(opacity: animation, child: child),
+                  ),
+                );
+              },
+              child: Text(
+                _showCategories ? 'Categorías' : 'Hábitos',
+                key: ValueKey(_showCategories ? 'cat' : 'hab'),
+                style: widget.style?.copyWith(
+                  color: _showCategories ? AppColors.neonGreen : null,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          AnimatedRotation(
+            turns: _showCategories ? 0.5 : 0,
+            duration: const Duration(milliseconds: 350),
+            child: const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: AppColors.neonGreen,
+              size: 28,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -642,7 +721,9 @@ class _TrackingHabitCard extends StatelessWidget {
                       Text(habit.title, style: textTheme.titleMedium),
                       const SizedBox(height: 3),
                       Text(
-                        habit.progressText ?? 'Sin progreso registrado',
+                        HabitsRepository().periodProgressText(habit) ??
+                            habit.progressText ??
+                            'Sin progreso registrado',
                         style: textTheme.bodyMedium?.copyWith(
                           color: AppColors.neonGreen,
                         ),
@@ -828,7 +909,11 @@ class _HabitSearchDelegate extends SearchDelegate<Habit?> {
                   ),
                 ),
           title: Text(habit.title),
-          subtitle: Text(habit.progressText ?? 'Sin progreso'),
+          subtitle: Text(
+            HabitsRepository().periodProgressText(habit) ??
+                habit.progressText ??
+                'Sin progreso',
+          ),
           onTap: () => close(context, habit),
         );
       },

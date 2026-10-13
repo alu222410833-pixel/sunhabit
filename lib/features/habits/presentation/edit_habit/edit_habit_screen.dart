@@ -53,6 +53,7 @@ class EditHabitScreenState extends State<EditHabitScreen> {
   late HabitEvaluationType _evaluationType;
   late int _target;
   late String _unit;
+  late String _condition;
   late List<String> _checklist;
   late int _timerHours;
   late int _timerMinutes;
@@ -100,6 +101,7 @@ class EditHabitScreenState extends State<EditHabitScreen> {
     _evaluationType = h.evaluationType;
     _target = h.target ?? 1;
     _unit = h.unit ?? 'Unidades';
+    _condition = h.condition ?? 'Al menos';
     _checklist = List.from(h.checklist ?? []);
 
     final duration = h.estimatedDuration ?? const Duration(minutes: 10);
@@ -160,6 +162,7 @@ class EditHabitScreenState extends State<EditHabitScreen> {
       current: isAmount ? (widget.habit.current ?? 0) : null,
       target: isAmount ? _target : null,
       unit: isAmount ? _unit : null,
+      condition: isAmount || isTimer ? _condition : null,
       yesNo: isYesNo ? (widget.habit.yesNo ?? false) : null,
       checklist: isChecklist && _checklist.isNotEmpty ? List.from(_checklist) : null,
       completedChecklist: isChecklist ? (widget.habit.completedChecklist ?? []) : null,
@@ -303,12 +306,12 @@ class EditHabitScreenState extends State<EditHabitScreen> {
       case HabitEvaluationType.yesNo:
         return 'Marcar como completado';
       case HabitEvaluationType.amount:
-        return 'Al menos $_target $_unit';
+        return '$_condition $_target $_unit';
       case HabitEvaluationType.timer:
         final h = _timerHours.toString().padLeft(2, '0');
         final m = _timerMinutes.toString().padLeft(2, '0');
         final s = _timerSeconds.toString().padLeft(2, '0');
-        return '$h:$m:$s';
+        return '$_condition $h:$m:$s';
       case HabitEvaluationType.checklist:
         return '${_checklist.length} objetivos';
     }

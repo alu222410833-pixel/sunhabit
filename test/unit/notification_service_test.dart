@@ -62,22 +62,55 @@ void main() {
 
     test('idFor is stable for same inputs', () {
       final habit = Habit(id: 'h1', title: 'T', categoryId: 'health');
+      const reminder = Reminder(hour: 8, minute: 30);
       final date = DateTime(2026, 8, 30);
-      final id1 = ReminderService.instance.idFor(habit, 0, date);
-      final id2 = ReminderService.instance.idFor(habit, 0, date);
+      final id1 = ReminderService.instance.idFor(habit, reminder, date);
+      final id2 = ReminderService.instance.idFor(habit, reminder, date);
       expect(id1, id2);
+    });
+
+    test('idFor is stable across reminder list order changes', () {
+      // La identidad del recordatorio depende de su contenido, no de
+      // su índice en la lista: borrar/reordenar otros recordatorios
+      // no invalida sus programaciones.
+      final habit = Habit(id: 'h1', title: 'T', categoryId: 'health');
+      const reminder = Reminder(hour: 8, minute: 30);
+      const other = Reminder(hour: 20, minute: 0);
+      final date = DateTime(2026, 8, 30);
+      final id1 = ReminderService.instance.idFor(habit, reminder, date);
+      final id2 = ReminderService.instance.idFor(habit, reminder, date);
+      expect(id1, id2);
+      final idOther = ReminderService.instance.idFor(habit, other, date);
+      expect(idOther, isNot(id1));
     });
 
     test('idFor differs for different habits', () {
       final date = DateTime(2026, 8, 30);
+      const reminder = Reminder(hour: 8, minute: 30);
       final id1 = ReminderService.instance.idFor(
         Habit(id: 'h1', title: 'A', categoryId: 'health'),
-        0,
+        reminder,
         date,
       );
       final id2 = ReminderService.instance.idFor(
         Habit(id: 'h2', title: 'B', categoryId: 'health'),
-        0,
+        reminder,
+        date,
+      );
+      expect(id1, isNot(id2));
+    });
+
+    test('idFor differs for different reminder contents', () {
+      final habit = Habit(id: 'h1', title: 'A', categoryId: 'health');
+      final date = DateTime(2026, 8, 30);
+      final id1 = ReminderService.instance.idFor(
+        habit,
+        const Reminder(hour: 8, minute: 30),
+        date,
+      );
+      final id2 = ReminderService.instance.idFor(
+        habit,
+        const Reminder(hour: 9, minute: 30),
         date,
       );
       expect(id1, isNot(id2));
@@ -85,8 +118,9 @@ void main() {
 
     test('idFor produces positive 31-bit integers', () {
       final habit = Habit(id: 'h_long_hash_test_12345', title: 'A', categoryId: 'health');
+      const reminder = Reminder(hour: 23, minute: 59, type: 'Alarma');
       final date = DateTime(2026, 12, 31);
-      final id = ReminderService.instance.idFor(habit, 3, date);
+      final id = ReminderService.instance.idFor(habit, reminder, date);
       expect(id, greaterThanOrEqualTo(0));
       expect(id, lessThanOrEqualTo(0x7FFFFFFF));
     });

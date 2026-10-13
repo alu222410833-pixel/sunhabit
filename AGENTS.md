@@ -139,7 +139,10 @@ soporta `AndroidNotificationAction` (botones de acción en la notificación).
 
 - **'Notificación'** → `NotificationService.schedule` con acciones rápidas:
   - Sí/No para hábitos binarios.
-  - +1 `<unidad>` para hábitos de cantidad.
+  - Hábitos de cantidad: solo **Abrir** (lleva a la pantalla de
+    ejecución del hábito) + Posponer. Las acciones +1/Escribir se
+    eliminaron (2026-10-14, poco prácticas); sus handlers de background
+    se conservan para notificaciones antiguas aún programadas.
   - Posponer 10 min.
   - Iniciar / Ver lista / Registrar según el tipo de hábito.
 - **'Alarma'** → `AlarmService` (pantalla completa + sonido + vibración).
@@ -282,6 +285,26 @@ restauraban categorías personalizadas creadas por el usuario.
 3. Los métodos `addCategory()`, `updateCategory()` y `deleteCategory()` ahora operan
    directamente sobre `_categories` y guardan los cambios de forma asíncrona.
 4. `BackupService` ahora exporta e importa las categorías persistidas de forma completa.
+
+### Medios en el backup (2026-10-15)
+
+Los campos de texto nuevos (`whyPhrase`, `whyGoal`, `whyImagePath`) ya
+viajaban en el backup porque se copia el JSON crudo del hábito; pero los
+**archivos** referenciados (imagen «Mi porqué», imagen/icono de categoría,
+sonidos de recordatorios y `defaultSoundPath`) quedaban rotos al importar
+en otro dispositivo. Ahora `BackupService`:
+
+- **Exporta**: embebe cada archivo existente referenciado en base64 bajo
+  `data.media` = `[{path, data}]`. Clave aditiva → backups v1 sin `media`
+  y apps antiguas leyendo un backup nuevo siguen funcionando.
+- **Importa**: escribe los medios en `documents/backup_media/` (prefijo de
+  índice para evitar colisiones de basename) y reescribe las rutas
+  absolutas del JSON (`imagePath`, `whyImagePath`, `defaultSoundPath` y
+  `reminders[].soundPath`) por las nuevas locales. Si `path_provider` no
+  está disponible (tests) se conservan las rutas originales.
+- La UI ya hace fallback a icono cuando `File(path).existsSync()` es
+  falso, así que un backup sin medios (o con archivos que ya no existían)
+  nunca rompe la visualización.
 
 ---
 
@@ -1732,9 +1755,9 @@ datos reales sin aviso.
 6. **`copyWith` con sentinel** (`_unset`) en todos los campos nullable
    que el usuario pueda querer limpiar, no solo en algunos.
 7. **La UI no debe prometer lo que el modelo no evalúa**: `condition`
-   ("Al menos/Menos de...") y `timesPerPeriod` se muestran/guardan pero
-   no afectan `isCompleted`/`isScheduledFor` — o se implementan o se
-   quitan.
+   ("Al menos/Menos de...") y `timesPerPeriod` se mostraban/guardaban
+   sin afectar `isCompleted`/`isScheduledFor` — implementados después;
+   ver «Condición del objetivo y veces por período».
 
 ---
 
@@ -1778,16 +1801,227 @@ limpiar. `toJson`/`fromJson` los persisten sin migración (nullable).
 ## Tutorial de onboarding (2026-10-13)
 
 `OnboardingScreen` (`lib/features/onboarding/presentation/`): carrusel
-`PageView` de 5 slides (bienvenida, crear hábito, registrar progreso,
-recordatorios, «Tu porqué») con dots animados, «Omitir» y botón final
-«Crear mi primer hábito» que abre el `CreateHabitDialog` **desde el
-propio onboarding** (su contexto sí está dentro del Navigator; el
+`PageView` de 4 slides explicativas (bienvenida, registrar progreso,
+recordatorios, «Tu porqué») + página final **interactiva** «Empecemos».
+Las slides con mucho texto usan `features` (`_SlideFeature` +
+`_FeatureGrid`): mini-tarjetas con icono + etiqueta en vez de párrafos
+(p. ej. las 4 formas de registrar). `_SlideView` se envuelve en
+`SingleChildScrollView` + `ConstrainedBox(minHeight)` para centrar sin
+desbordar en pantallas pequeñas.
+con dos tarjetas de paso que abren los diálogos reales:
+`CreateCategoryDialog` («1 · Crear mi primera categoría») y
+`CreateHabitDialog` («2 · Crear mi primer hábito»). Cada tarjeta muestra
+✓ + el nombre de lo creado al completarse; se pueden repetir. Así el
+usuario aprende haciéndolo y no hace falta slide de texto explicando
+cómo crear categorías/hábitos. Los diálogos se abren **desde el propio
+onboarding** (su contexto sí está dentro del Navigator; el
 `rootNavigatorKey.currentContext` NO sirve para `showDialog`).
+
+### Título animado «Hábitos/Categorías»
+En `HabitsScreen` el título (`_HabitsTitle`) alterna cada ~4 s entre
+«Hábitos» y «Categorías» (slide vertical + color neón + flecha que
+gira) para indicar que es pulsable y que abre el menú de categorías
+(`CategoriesMenuScreen`). El `AnimatedSwitcher` distingue entrante/
+saliente comparando `child.key` con el estado actual: el entrante sube
+desde abajo y el saliente sale hacia arriba (su animation corre 1→0,
+por eso su tween va de -1 a 0).
 
 ### Activación
 - `SunHabitApp._maybeShowOnboarding` (post-frame en `initState`): si el
   flag `onboarding_seen_v1` de `StorageService` no está a `'1'` y no hay
   alarma sonando, llama a `OnboardingScreen.launch()` (push sobre
   `AppRouter.rootNavigatorKey`) y luego guarda el flag.
-- Re-lanzable desde Ajustes → «Ver tutorial» (sección Ayuda).
+- Re-lanzable desde Ajustes → «Ver tutorial» (sección Ayuda) y desde
+  Perfil → «Iniciar tutorial».
+
+---
+
+## Condición del objetivo y «veces por período» (2026-10-14)
+
+### `Habit.condition`
+
+Nuevo campo nullable: `'Al menos'` (defecto), `'Menos de'`,
+`'Exactamente'` o `'Libre'`. Se persiste en `toJson`/`fromJson` y lo
+evalúa `Habit.isGoalMet(value, [goal])`:
+
+- 'Al menos' → `value >= goal` (sin goal → `value > 0`).
+- 'Menos de' → `value < goal` (hábito de límite/reducción; sin goal →
+  `value > 0`, nunca "siempre cumplido"). El día **empieza cumplido**
+  (0 < límite = éxito por defecto): `_resetDailyCompletion` siembra el
+  log cumplido y solo se marca fallido al registrar un valor ≥ límite.
+- 'Exactamente' → `value == goal`.
+- 'Libre' → cualquier progreso `> 0`.
+
+Consumidores: `incrementHabitAmount`, `setHabitAmount` (meta = `target`)
+y `completeHabitWithDuration` (meta = `estimatedDuration.inSeconds`;
+si no se cumple, la sesión queda como progreso parcial sin completar).
+El wizard guarda `_condition`/`_timerCondition`; `EditHabitScreen` lo
+conserva y lo muestra en el resumen de meta (no tiene picker propio).
+
+### `'Algunas veces por período'`
+
+- `isScheduledFor` → **true todos los días** dentro del rango de
+  fechas (días flexibles; antes compartía la lógica de `'Repetir'`,
+  lo que era incorrecto). `repeatInterval` se ignora en esta
+  frecuencia aunque el picker lo recoja.
+- La racha es **por períodos** (`HabitStreakCalculator._periodStreak`):
+  un período (semana ISO / mes / año según `periodType`) está cumplido
+  si tuvo ≥ `timesPerPeriod` logs completados. Un período en curso
+  incompleto no rompe la racha.
+- Progreso visible: `HabitsRepository.getPeriodProgress` → `(done,
+  goal)` y `periodProgressText` → "2/3 esta semana", usado en
+  `HomeHabitTile`, `HabitsScreen` y `HabitCard`.
+- Como está programado a diario, los recordatorios usan la ventana
+  rodante de 14 días (avisos diarios hasta cumplir la meta semanal).
+
+### Resync del temporizador tras wipes globales
+
+`NotificationService.cancelAll()` borra también la notificación
+persistente del timer (id 888888) y los avisos de cuidado visual.
+`HabitExecutionService.resyncActiveNotification()` los repinta si hay
+sesión activa; lo llaman `rescheduleAllFromScratch` (importar backup)
+y `_migrateToStableIds`.
+
+---
+
+## Fixes de temporizador e historial (2026-10-14, segunda tanda)
+
+- **Preservación de duración**: `_logHabit` conserva el `currentValue`
+  del log existente para hábitos `timer` cuando no hay override —
+  editar o des-completar ya no borra los segundos registrados.
+- **'Exactamente' en temporizador**: el tick puede pasarse de la meta
+  1-2 s; `completeHabitWithDuration` clampa `seconds` a la meta antes
+  de evaluar, así 'Exactamente' = "llegar a la meta".
+- **Cruce de medianoche**: `HabitTimerSession.logDay` (persistido)
+  guarda el día de inicio y `completeHabitWithDuration(id, s,
+  date: logDay)` registra el cumplimiento en ese día sin marcar el
+  estado vivo si ya es otro día.
+- **Banner del timer**: fijo al pie del Home (fuera del `ListView`) —
+  visible aunque el hábito no esté programado hoy.
+- **`periodProgressText`**: etiqueta "esta/ese semana·mes·año" según
+  el período de `date` sea el actual.
+- **Días flexibles**: 'Algunas veces por período' muestra estado
+  neutro (guión) en `HomeHabitTile` fuera de hoy y "Día flexible" en
+  el calendario del detalle — un día sin log no es un fallo.
+- Lección: un registro temporal debe conservar **a qué día pertenece**
+  además de cuándo ocurrió; y en hábitos de límite/reducción, "no
+  registrar nada" ES el éxito — el reset diario siembra el log
+  cumplido en vez de esperar actividad.
+
+---
+
+## Recordatorios de ciclo largo e identidad por contenido (2026-10-14, tercera tanda)
+
+- **Ocurrencias > 14 días nunca se programaban**: para frecuencias no
+  semanales (anual, mensual, intervalo > 14 días) solo se programaba lo
+  que caía dentro de la ventana rodante. Ahora, además de la ventana, se
+  programa la **primera ocurrencia más allá de ella** escaneando hasta
+  `longRangeScanDays` (400) con `_nextFarOccurrence` (corta al pasar
+  `endDate`). `cancelHabit` cancela esa misma ocurrencia.
+- **Reprogramación al sonar**: `_onRingingChanged` (app.dart) re-armaba
+  TODA alarma de hábito +7 días — correcto para semanales, erróneo para
+  la ventana rodante. Ahora: semanales → +7 días (como antes); no
+  semanales → `scheduleHabit(habit)` completo, que rellena la ventana y
+  la siguiente ocurrencia lejana. `supportsWeeklyAlarms` es público.
+- **Identidad por contenido, no por índice**: `idFor`/`idForWeekday`
+  ahora hashean el contenido del `Reminder` (`_reminderKey`: tipo, hora,
+  sonido, weekDays) en lugar de su posición en la lista — borrar o
+  reordenar recordatorios ya no invalida las programaciones de los demás.
+- **Snooze con ID fijo**: `snoozeHabit` usaba
+  `stableHash(habit.id) + minuto + minutos` — indeterminista e
+  imposible de cancelar; cada snooze acumulaba notificaciones. Ahora es
+  `stableHash('${habit.id}_snooze')`: el último snooze reemplaza al
+  anterior.
+- **Guards de tipo**: `setHabitYesNo`, `incrementHabitAmount`,
+  `setHabitAmount` y `toggleChecklistItem` validan `evaluationType`
+  antes de mutar — una llamada errónea ya no puede des-completar ni
+  escribir campos ajenos al tipo del hábito.
+- Lección: las recurrencias nativas solo cubren el caso semanal;
+  cualquier otra periodicidad necesita una red de seguridad (ocurrencia
+  lejana) + reprogramación al dispararse.
+
+---
+
+## Bottom sheet de completado vacío (2026-10-14)
+
+### Problema
+Al tocar un hábito, el sheet aparecía como un panel con el gradiente
+pero **sin ningún contenido** (ni handle, ni header, ni acciones).
+
+### Causa raíz
+`BoxDecoration` con `borderRadius` + `Border` de lados con colores
+distintos (top neón / laterales `borderDark`) lanza
+`"A borderRadius can only be given on borders with uniform colors"`
+durante `paint()`. La excepción aborta el paint del subárbol: el
+gradiente se pinta pero los hijos nunca se dibujan — y no produce
+pantalla roja ni log evidente, solo el panel vacío.
+
+### Fix
+Borde uniforme (`Border.all(color: borderDark)`) + el acento neón
+superior como un `Positioned` de 1.4 px dentro de un `Stack`. Se
+conservó el `DraggableScrollableSheet` (arrastrable 35%→95%,
+`initialChildSize: 0.55`, `snap: true`) con el patrón canónico:
+`ListView(controller: scrollController)` como hijo.
+
+### Lección
+- Un error en `paint()` no rompe el build ni muestra error widget:
+  simplemente **ese nodo y sus hijos no se pintan**. Un panel "vacío
+  pero con decoración" es el síntoma típico.
+- `Border(top/lado distintos)` + `borderRadius` = excepción; para
+  bordes redondeados el borde debe ser uniforme y los acentos se
+  dibujan con widgets aparte (línea/gradiente superpuesta).
+
+---
+
+## Temporizador en background (2026-10-14)
+
+### Problema
+Al salir de la app con un temporizador activo, al volver el tiempo se
+veía congelado o "distorsionado" y, si la meta se cumplía fuera, no
+pasaba nada hasta reabrir.
+
+### Causas y fixes
+- **Ticks suspendidos**: el `Timer.periodic` de Dart se suspende en
+  background. El `elapsedSeconds` ya era por reloj de pared
+  (`DateTime.now() - startedAt`), así que el tiempo no se perdía, pero
+  la UI esperaba al siguiente tick para repintar. `app.dart` ahora
+  llama `HabitExecutionService.syncAfterResume()` en `resumed`, que
+  recalcula de inmediato y cierra la sesión si la meta ya se alcanzó.
+- **Cuidado visual por contador de ticks**: `_eyeCareRemaining--` por
+  tick se desincronizaba al suspenderse el ticker. Ahora la fase se
+  ancla a `_eyeCarePhaseEndsAt` (reloj de pared) y `_onTick` avanza
+  todas las fases perdidas en un bucle — pausa/reanuda/restaura
+  re-anclan el instante.
+- **Sin aviso al cumplirse la meta**: nada sonaba si el tiempo se
+  completaba con la app cerrada. Nuevo aviso nativo
+  `habitTimerEndNotificationId` (910005) programado al inicio/reanudar
+  con el remanente real; se cancela en pausa/stop y se reprograma en
+  `resyncActiveNotification`/`restoreSession`.
+- Lección: **nunca midas tiempo contando ticks de Timer** — ancla un
+  `DateTime` de inicio/fin y deriva el resto por reloj de pared; el
+  ticker es solo para repintar la UI.
+
+### Segunda pasada (mismo día)
+- **"Finalizar" en `AlarmRingingScreen` no completaba**: usaba
+  `saveHabitDuration` (solo log, jamás `isCompleted`). Ahora usa
+  `finishTimer()` — mismo camino que la acción de notificación, con
+  `logDay` incluido. `saveHabitDuration` eliminado (quedó muerto).
+- **Acciones de notificación tragadas en cold-start**: el handler de
+  foreground llamaba `pauseTimer`/`resumeTimer`/`finishTimer` sin
+  restaurar la sesión; si llegaba antes de que `main.dart` terminara
+  `restoreSession`, la acción se perdía y el cronómetro nativo de la
+  notificación seguía contando. Ahora `_handleTimerAction` hace
+  `await restoreSession()` primero (igual que el handler de
+  background), y `restoreSession` es no-op si ya hay sesión viva.
+- **Pausa residual**: `pauseTimer` no paraba el `Timer.periodic` (seguía
+  notificando cada segundo) y una sesión restaurada en pausa arrancaba
+  ticker innecesario. Ahora el ticker se cancela al pausar/restaurar
+  pausado y se recrea al reanudar.
+- **Cuidado visual en pausa en el borde de fase**: si se pausaba justo
+  al terminar una fase, al reanudar el remanente era 0 y la fase quedaba
+  congelada; `resumeTimer` avanza a la siguiente fase en ese caso.
+- Lección: **toda acción de notificación debe ser idempotente y
+  auto-suficiente**: restaurar estado si falta, ignorar si la sesión
+  ya no existe. Y solo debe haber **un camino de cierre** del timer
+  (`finishTimer`), no uno por punto de entrada.
 

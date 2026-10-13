@@ -240,7 +240,7 @@ class _ReminderTile extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           SizedBox(
             width: 42,
             height: 42,
@@ -256,10 +256,11 @@ class _ReminderTile extends StatelessWidget {
                     ),
                   ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   habit.title,
@@ -274,14 +275,18 @@ class _ReminderTile extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            onPressed: onDelete,
-            icon: const Icon(
-              Icons.delete_outline_rounded,
-              color: AppColors.danger,
-              size: 22,
+          SizedBox(
+            width: 40,
+            child: IconButton(
+              onPressed: onDelete,
+              icon: const Icon(
+                Icons.delete_outline_rounded,
+                color: AppColors.danger,
+                size: 22,
+              ),
+              tooltip: 'Eliminar recordatorio',
+              padding: EdgeInsets.zero,
             ),
-            tooltip: 'Eliminar recordatorio',
           ),
         ],
       ),
@@ -304,23 +309,26 @@ class _TypeBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isAlarm ? Icons.alarm_rounded : Icons.notifications_none_rounded,
-            size: 11,
-            color: color,
-          ),
-          const SizedBox(width: 3),
-          Text(
-            isAlarm ? 'Alarma' : 'Aviso',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.w600,
-                ),
-          ),
-        ],
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isAlarm ? Icons.alarm_rounded : Icons.notifications_none_rounded,
+              size: 11,
+              color: color,
+            ),
+            const SizedBox(width: 3),
+            Text(
+              isAlarm ? 'Alarma' : 'Aviso',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -337,8 +345,11 @@ class _WeekDayDots extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: List.generate(7, (i) {
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        children: List.generate(7, (i) {
         final active = weekDays == null ||
             weekDays!.isEmpty ||
             (i < weekDays!.length && weekDays![i]);
@@ -371,7 +382,8 @@ class _WeekDayDots extends StatelessWidget {
             ),
           ),
         );
-      }),
+        }),
+      ),
     );
   }
 }

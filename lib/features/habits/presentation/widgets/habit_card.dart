@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/core/theme/app_decorations.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
+import 'package:sunhabit/features/habits/data/habits_repository.dart';
 import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
 
 class HabitCard extends StatelessWidget {
@@ -31,7 +32,11 @@ class HabitCard extends StatelessWidget {
                 ),
         ),
         title: Text(habit.title),
-        subtitle: habit.progressText == null ? null : Text(habit.progressText!),
+        subtitle: Text(
+          HabitsRepository().periodProgressText(habit) ??
+              habit.progressText ??
+              'Sin progreso',
+        ),
       ),
     );
   }

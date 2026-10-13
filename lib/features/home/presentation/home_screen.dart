@@ -68,77 +68,79 @@ class _HomeScreenState extends State<HomeScreen> {
           body: DecoratedBox(
             decoration: AppDecorations.pageBackground,
             child: SafeArea(
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    _buildHeader(theme.textTheme),
-                    HomeSummaryCard(
-                      total: habits.length,
-                      completed: completed,
-                      pending: pending,
-                      percent: percent,
-                      textTheme: theme.textTheme,
-                    ),
-                    HomeDateRow(
-                      textTheme: theme.textTheme,
-                      selectedDate: _selectedDate,
-                      onDateSelected: (date) =>
-                          setState(() => _selectedDate = date),
-                    ),
-                    if (habits.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 32,
-                          horizontal: 24,
-                        ),
-                        child: Text(
-                          isToday
-                              ? 'No hay hábitos programados para hoy.'
-                              : 'No hay hábitos programados para este día.',
-                          style: theme.textTheme.bodyMedium,
-                          textAlign: TextAlign.center,
-                        ),
-                      )
-                    else
-                      ListView.separated(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
-                        itemCount: habits.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 9),
-                        itemBuilder: (context, index) {
-                          final habit = habits[index];
-                          // Sí/No: toggle directo del check sin abrir el
-                          // bottom sheet (solo si es hoy, que es editable).
-                          // Otros tipos: abren el sheet (editable hoy,
-                          // solo lectura otros días).
-                          final VoidCallback? onTap;
-                          if (!isToday) {
-                            onTap = () => _openHabitCompletion(
-                                  context,
-                                  habit.id,
-                                  readOnly: true,
-                                  habit: habit,
-                                );
-                          } else if (habit.evaluationType ==
-                              HabitEvaluationType.yesNo) {
-                            onTap = () => HabitsRepository()
-                                .setHabitYesNo(habit.id, !habit.isCompleted);
-                          } else {
-                            onTap = () =>
-                                _openHabitCompletion(context, habit.id);
-                          }
-                          return HomeHabitTile(
-                            habit: habit,
-                            selectedDate: _selectedDate,
-                            onTap: onTap,
-                          );
-                        },
-                      ),
-                    if (isToday) _buildActiveTimerBanner(theme),
-
-                  ],
-                ),
+              child: Column(
+                children: [
+                  _buildHeader(theme.textTheme),
+                  HomeSummaryCard(
+                    total: habits.length,
+                    completed: completed,
+                    pending: pending,
+                    percent: percent,
+                    textTheme: theme.textTheme,
+                  ),
+                  HomeDateRow(
+                    textTheme: theme.textTheme,
+                    selectedDate: _selectedDate,
+                    onDateSelected: (date) =>
+                        setState(() => _selectedDate = date),
+                  ),
+                  Expanded(
+                    child: habits.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 32,
+                                horizontal: 24,
+                              ),
+                              child: Text(
+                                isToday
+                                    ? 'No hay hábitos programados para hoy.'
+                                    : 'No hay hábitos programados para este día.',
+                                style: theme.textTheme.bodyMedium,
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+                            itemCount: habits.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 9),
+                            itemBuilder: (context, index) {
+                              final habit = habits[index];
+                              // Sí/No: toggle directo del check sin abrir el
+                              // bottom sheet (solo si es hoy, que es editable).
+                              // Otros tipos: abren el sheet (editable hoy,
+                              // solo lectura otros días).
+                              final VoidCallback? onTap;
+                              if (!isToday) {
+                                onTap = () => _openHabitCompletion(
+                                      context,
+                                      habit.id,
+                                      readOnly: true,
+                                      habit: habit,
+                                    );
+                              } else if (habit.evaluationType ==
+                                  HabitEvaluationType.yesNo) {
+                                onTap = () => HabitsRepository()
+                                    .setHabitYesNo(habit.id, !habit.isCompleted);
+                              } else {
+                                onTap = () =>
+                                    _openHabitCompletion(context, habit.id);
+                              }
+                              return HomeHabitTile(
+                                habit: habit,
+                                selectedDate: _selectedDate,
+                                onTap: onTap,
+                              );
+                            },
+                          ),
+                  ),
+                  // Banner del temporizador activo, fijo al pie: debe
+                  // verse aunque el hábito no esté programado hoy (p.
+                  // ej. un timer que cruzó medianoche).
+                  if (isToday) _buildActiveTimerBanner(theme),
+                ],
               ),
             ),
           ),

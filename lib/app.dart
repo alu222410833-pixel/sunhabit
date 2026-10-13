@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
+import 'package:sunhabit/core/services/habit_execution_service.dart';
 import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/services/storage_service.dart';
 import 'package:sunhabit/core/theme/app_theme.dart';
@@ -62,6 +63,11 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
       // Al volver de background, comprobar si el día cambió mientras la app
       // estaba pausada (el Timer no se ejecuta en background).
       HabitsRepository().checkDayChange();
+      // El ticker del temporizador también se suspende en background:
+      // resincronizar de inmediato para que la UI no muestre un tiempo
+      // congelado hasta el siguiente tick (y cerrar la sesión si la
+      // meta se alcanzó mientras tanto).
+      HabitExecutionService().syncAfterResume();
       // No re-programar si hay una alarma sonando, para no interferir.
       if (AlarmService.instance.ringingAlarms.isEmpty) {
         unawaited(ReminderService.instance.scheduleAllHabits());
@@ -114,14 +120,23 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
           if (habitId != null) {
             final habit = HabitsRepository().getHabitById(habitId);
             if (habit != null) {
-              final nextWeek =
-                  alarm.dateTime.add(const Duration(days: 7));
-              // Solo reprogramar si el hábito sigue programado para esa fecha
-              // (respeta endDate y cambios de weekDays).
-              if (habit.isScheduledFor(nextWeek)) {
-                unawaited(Alarm.set(
-                  alarmSettings: alarm.copyWith(dateTime: nextWeek),
-                ));
+              if (ReminderService.instance.supportsWeeklyAlarms(habit)) {
+                final nextWeek =
+                    alarm.dateTime.add(const Duration(days: 7));
+                // Solo reprogramar si el hábito sigue programado para esa fecha
+                // (respeta endDate y cambios de weekDays).
+                if (habit.isScheduledFor(nextWeek)) {
+                  unawaited(Alarm.set(
+                    alarmSettings: alarm.copyWith(dateTime: nextWeek),
+                  ));
+                }
+              } else {
+                // Frecuencias no semanales (ventana rodante): re-armar
+                // +7 días no es correcto. Reprogramar el hábito completo
+                // rellena la ventana de 14 días y la próxima ocurrencia
+                // lejana (ciclos largos) aunque la app no se abra.
+                unawaited(
+                    ReminderService.instance.scheduleHabit(habit));
               }
             }
           }
