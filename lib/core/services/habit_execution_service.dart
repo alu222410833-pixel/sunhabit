@@ -92,7 +92,6 @@ class HabitExecutionService extends ChangeNotifier {
   bool _eyeCareEnabled = false;
   bool _eyeCareWorkPhase = true;
   int _eyeCareRemaining = 0;
-  int? _eyeCareNotificationId;
 
   HabitTimerSession? get currentSession => _currentSession;
 
@@ -104,19 +103,19 @@ class HabitExecutionService extends ChangeNotifier {
   int get eyeCareRemaining => _eyeCareRemaining;
 
   void startTimer(Habit habit) {
-    _startSession(habit);
     _eyeCareEnabled = false;
     _eyeCareWorkPhase = true;
     _eyeCareRemaining = 0;
     _cancelEyeCareNotification();
+    _startSession(habit);
     notifyListeners();
   }
 
   void startTimerWithEyeCare(Habit habit) {
-    _startSession(habit);
     _eyeCareEnabled = true;
     _eyeCareWorkPhase = true;
     _eyeCareRemaining = AppConstants.eyeCareWorkSeconds;
+    _startSession(habit);
     _syncEyeCareNotification();
     notifyListeners();
   }
@@ -197,16 +196,31 @@ class HabitExecutionService extends ChangeNotifier {
       final session = HabitTimerSession.fromJson(json);
       // Si el hábito asociado ya no existe, descartamos la sesión.
       if (HabitsRepository().getHabitById(session.habitId) == null) {
+        _cancelEyeCareNotification();
         await _clearPersistedSession();
         return false;
       }
       _currentSession = session;
+      // Restaurar el estado de cuidado visual persistido con la sesión;
+      // si no se restaura, el toggle queda apagado pero la notificación
+      // nativa ya programada sonaría igual (huérfana).
+      _eyeCareEnabled = json['eyeCareEnabled'] as bool? ?? false;
+      _eyeCareWorkPhase = json['eyeCareWorkPhase'] as bool? ?? true;
+      _eyeCareRemaining = json['eyeCareRemaining'] as int? ?? 0;
       _ticker?.cancel();
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
       _syncNotification();
+      if (_eyeCareEnabled && !session.isPaused) {
+        // Reprograma el aviso de la fase actual (reemplaza el pendiente
+        // huérfano con el tiempo restante real).
+        _syncEyeCareNotification();
+      } else {
+        _cancelEyeCareNotification();
+      }
       notifyListeners();
       return true;
     } catch (_) {
+      _cancelEyeCareNotification();
       await _clearPersistedSession();
       return false;
     }
@@ -217,7 +231,12 @@ class HabitExecutionService extends ChangeNotifier {
     try {
       await _storage.setString(
         _sessionKey,
-        jsonEncode(_currentSession!.toJson()),
+        jsonEncode(
+          _currentSession!.toJson()
+            ..['eyeCareEnabled'] = _eyeCareEnabled
+            ..['eyeCareWorkPhase'] = _eyeCareWorkPhase
+            ..['eyeCareRemaining'] = _eyeCareRemaining,
+        ),
       );
     } catch (_) {
       // StorageService puede no estar inicializado en tests; ignoramos.
@@ -276,7 +295,8 @@ class HabitExecutionService extends ChangeNotifier {
   /// el dispositivo tenga optimización agresiva de batería.
   void _syncEyeCareNotification() {
     if (!_eyeCareEnabled || _currentSession == null) return;
-    _eyeCareNotificationId = AlarmService.instance.setUtilityNotification(
+    AlarmService.instance.setUtilityNotification(
+      id: AlarmService.habitEyeCareNotificationId,
       durationSeconds: _eyeCareRemaining,
       title: _eyeCareTitle,
       body: _eyeCareBody,
@@ -285,11 +305,9 @@ class HabitExecutionService extends ChangeNotifier {
 
   /// Cancela la notificación de cuidado visual programada.
   void _cancelEyeCareNotification() {
-    final id = _eyeCareNotificationId;
-    if (id != null) {
-      AlarmService.instance.cancelUtilityNotificationById(id);
-      _eyeCareNotificationId = null;
-    }
+    AlarmService.instance.cancelUtilityNotificationById(
+      AlarmService.habitEyeCareNotificationId,
+    );
   }
 
   String get _eyeCareTitle =>

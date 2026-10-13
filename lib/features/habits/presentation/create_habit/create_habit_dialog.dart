@@ -237,6 +237,9 @@ class _CreateHabitDialogState extends State<CreateHabitDialog> {
       startDate: _startDate,
       endDate: _endDate,
       reminders: _reminders,
+      whyPhrase: initial?.whyPhrase,
+      whyGoal: initial?.whyGoal,
+      whyImagePath: initial?.whyImagePath,
       isCompleted: initial?.isCompleted ?? false,
       points: initial?.points ?? (isYesNo ? 10 : 15),
     );

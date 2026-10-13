@@ -903,8 +903,9 @@ Rutas adicionales: `/alarm` (AlarmSettings como extra), `/habits/:habitId`,
   `HomeBottomNavBar`.
 - **Acciones:** cambiar fecha (días pasados = solo lectura), tap en
   hábito Sí/No = toggle directo; otros tipos abren
-  `HabitCompletionBottomSheet`; "+" abre `ExpressHabitDialog` y, si se
-  cierra sin guardar, `CreateHabitDialog`.
+  `HabitCompletionBottomSheet`; "+" abre `CreateHabitDialog`;
+  campana → `Navigator.push` a `RemindersListScreen` (pantalla completa;
+  antes era `showModalBottomSheet`, cambiado 2026-10-13).
 - **Datos:** `HabitsRepository` (`getHabitsForDate`),
   `HabitExecutionService`, `ReminderService`.
 
@@ -1045,15 +1046,16 @@ Rutas adicionales: `/alarm` (AlarmSettings como extra), `/habits/:habitId`,
 
 ### Diálogos
 
-#### 17. ExpressHabitDialog — `create_habit/express_habit_dialog.dart`
-- **Desde:** Home "+". Creación rápida por comando de texto con `|`:
-  TextField + chips de plantillas (`mainExpressTemplates`,
-  `frequencyExpressTemplates`), vista previa con `HabitCard`, lista de
-  errores, "Modo detallado" → `CreateHabitDialog`, "Crear".
-- **Datos:** `ExpressHabitParser`. Devuelve `Habit`.
+#### 17. ~~ExpressHabitDialog~~ — ELIMINADO (2026-10-13)
+- El modo Exprés (creación por comando de texto con `|`) se eliminó;
+  el "+" del Home abre `CreateHabitDialog` directamente. Idea a retomar
+  más adelante: `express_habit_dialog.dart`,
+  `domain/express_habit_parser.dart`, `domain/express_habit_templates.dart`
+  y `test/unit/express_habit_parser_test.dart` están en el historial de
+  git.
 
 #### 18. CreateHabitDialog — `create_habit/create_habit_dialog.dart`
-- **Desde:** Home (tras cerrar Express) y HabitsScreen. Wizard de 5
+- **Desde:** Home y HabitsScreen. Wizard de 5
   pasos (`PageView` + `CreateHabitStepIndicator` +
   Atrás/Siguiente/Guardar):
   1. `CreateHabitCategoryStep` — grid de categorías.
@@ -1405,19 +1407,15 @@ mismo patrón arquitectónico:
 
 ## Flujo de creación de hábitos (2026-10-04)
 
-Hay **dos formas de crear un hábito**: el modo Exprés (comando de texto)
-y el wizard detallado (5 pasos). El botón "+" de Home intenta siempre
-Exprés primero; el "+" de HabitsScreen abre un menú con "Crear hábito"
-(wizard directo) o "Crear categoría".
+Solo hay **una forma de crear un hábito**: el wizard detallado (5
+pasos). El "+" de Home lo abre directamente; el "+" de HabitsScreen abre
+un menú con "Crear hábito" (wizard) o "Crear categoría". (El modo Exprés
+se eliminó el 2026-10-13; ver nota más abajo.)
 
 ### Flujo general
 
 ```
-Home "+"  →  ExpressHabitDialog
-             ├─ devuelve Habit → addHabit + scheduleHabit
-             └─ devuelve null ("Modo detallado" o cerrado)
-                → CreateHabitDialog
-                  └─ devuelve Habit → addHabit + scheduleHabit
+Home "+"          →  CreateHabitDialog → addHabit + scheduleHabit
 
 HabitsScreen "+"  →  sheet: "Crear hábito" → CreateHabitDialog
                        "Crear categoría" → CreateCategoryDialog
@@ -1427,75 +1425,15 @@ Tras crear, el hábito se guarda (`HabitsRepository.addHabit`) y sus
 recordatorios se programan (`ReminderService.scheduleHabit`)
 inmediatamente, sin necesidad de reiniciar la app.
 
-### Modo Exprés — `ExpressHabitDialog`
+### Modo Exprés — ELIMINADO (2026-10-13)
 
-Creación con una sola línea de texto separada por `|`:
-
-```
-Título en Categoría | Métrica | Frecuencia | Fecha inicio | Hora
-```
-
-- **Parser:** `ExpressHabitParser` → `ParsedExpressHabit` (no es un
-  `Habit` todavía; falta icono/color de la categoría).
-- **Preview en vivo:** `_onTextChanged` re-parsea cada tecla y muestra
-  el `HabitCard` resultante + lista de errores.
-- **Chips de plantillas:** `mainExpressTemplates` (una por tipo de
-  evaluación) + `frequencyExpressTemplates` (tras "Más frecuencias").
-  Insertan el comando y seleccionan la parte editable.
-- **Botones:** "Modo detallado" (cierra → wizard) / "Crear" (solo si
-  `parsed.isValid`).
-- `isValid` requiere: sin errores + título + categoría + evaluationType.
-
-#### Gramática del parser
-
-**Segmento 1 — Título y categoría** (`_parseTitleAndCategory`):
-- `Título en Categoría` — busca ` en ` (última aparición) y resuelve la
-  categoría por nombre/id (case-insensitive).
-- Solo nombre de categoría → título = nombre, categoría = esa.
-- Sin categoría reconocida → título = texto, categoría = primera
-  disponible (fallback para no bloquear el preview).
-
-**Segmento 2 — Métrica** (`_parseMetric`):
-
-| Formato | Tipo | Extrae |
-|---|---|---|
-| `Sí/No`, `si`, vacío o no reconocido | `yesNo` | — (default) |
-| `Cantidad:` o `cant:` `2 vasos al menos` | `amount` | `target` (primer dígito), `unit` (texto tras número), `condition` ⚠️ |
-| `Timer:`/`Tiempo:`/`Duración:` `10 min` | `timer` | `estimatedDuration` (`1 hora`/`30 min`/`45 seg`/número suelto→min), `condition` ⚠️ |
-| `Lista:`/`Checklist:`/`Tareas:` `a, b, c` | `checklist` | ítems separados por `,` o `;` |
-
-⚠️ `condition` se parsea (`al menos`/`menos de`/`exactamente`/`libre`)
-pero **tampoco se persiste** aquí (el `Habit` no tiene el campo).
-
-**Segmento 3 — Frecuencia** (`_parseFrequency`):
-
-| Formato | Frecuencia |
-|---|---|
-| vacío, `todos los días`, `diario`, `diaria` | `Todos los días` |
-| `Lunes, Miércoles` / `L, X, V` / `Lunes a Viernes` | `Días exactos de la semana` (mapa de abreviaturas con/sin tilde) |
-| `Días mes:` / `dias mes:` / `mes:` `1, 15` | `Días específicos del mes` |
-| `3 veces por semana`/`mes`/`año` | `Algunas veces por período` |
-| `cada 3 días`/`cada 3 dias` | `Repetir` (intervalo) |
-| cualquier otra cosa | `Todos los días` (fallback) |
-
-⚠️ `yearDays` (Días específicos del año) **no se puede crear por
-Exprés** — no hay sintaxis para fechas del año.
-
-**Segmento 4 — Fecha inicio** (`_parseDate`):
-`hoy` (default/vacío), `mañana`, `DD/MM/AAAA` (también `-` y `.`, año
-de 2 o 4 dígitos). Si no matchea → hoy.
-
-**Segmento 5 — Hora** (`_parseTime`):
-`8:00 AM`/`8 pm` (12h, parsea antes que 24h), `20:00`/`20h` (24h),
-`8 h`/`8h` (solo hora). Devuelve un único `Reminder` (tipo
-`'Notificación'` por defecto, sin sonido).
-
-#### Limitaciones del modo Exprés vs. wizard
-
-- Solo **un** recordatorio, siempre tipo `'Notificación'`, sin sonido.
-- No soporta: `endDate`, `yearDays`, `weekDays` por recordatorio,
-  descripción, imagen/icono propios (hereda los de la categoría).
-- No se puede elegir tipo 'Alarma' ni recortar audio.
+La creación exprés por comando de texto (una línea separada por `|`:
+`Título en Categoría | Métrica | Frecuencia | Fecha | Hora`) se eliminó
+de la app; es una idea a retomar más adelante. Se borraron
+`create_habit/express_habit_dialog.dart`,
+`domain/express_habit_parser.dart`, `domain/express_habit_templates.dart`
+y `test/unit/express_habit_parser_test.dart`. La gramática del parser y
+la documentación detallada del modo Exprés están en el historial de git.
 
 ### Wizard detallado — `CreateHabitDialog`
 
@@ -1529,17 +1467,17 @@ Atrás/Siguiente/Guardar:
 
 ### Posibilidades resultantes por vía
 
-| Capacidad | Exprés | Wizard | Edición |
-|---|---|---|---|
-| Categoría | solo por nombre/id | sí | sí (picker) |
-| Descripción | no | sí | sí |
-| Tipo evaluación | los 4 | los 4 | los 4 |
-| Condición (al menos/menos de...) | parsea, no guarda | muestra, no guarda | no existe |
-| Checklist ítems | sí (`,`/`;`) | sí (reordenable) | sí |
-| Frecuencias | 5 de 6 (sin `yearDays`) | las 6 | las 6 |
-| Fecha fin | no | sí | sí |
-| Recordatorios | 1, siempre notif. | varios, con tipo/días/sonido | varios, igual |
-| Sonido + recorte | no | sí (alarma) | sí (alarma) |
+| Capacidad | Wizard | Edición |
+|---|---|---|
+| Categoría | sí | sí (picker) |
+| Descripción | sí | sí |
+| Tipo evaluación | los 4 | los 4 |
+| Condición (al menos/menos de...) | muestra, no guarda | no existe |
+| Checklist ítems | sí (reordenable) | sí |
+| Frecuencias | las 6 | las 6 |
+| Fecha fin | sí | sí |
+| Recordatorios | varios, con tipo/días/sonido | varios, igual |
+| Sonido + recorte | sí (alarma) | sí (alarma) |
 
 ---
 
@@ -1586,4 +1524,270 @@ Copiar el APK al teléfono → abrir → Android pedirá "Instalar apps de
 origen desconocido" para la app que lo abre (archivos/navegador) →
 aceptar. En Honor/MagicUI puede aparecer una advertencia extra de
 seguridad.
+
+---
+
+## Notificación del temporizador: doble tiempo y cronómetro negativo (2026-10-13)
+
+### Problema
+La notificación persistente del temporizador (`showTimerNotification`)
+mostraba dos tiempos que se contradecían:
+
+- El cronómetro nativo del sistema junto al nombre de la app (ej. `44:36`),
+  que se actualiza solo gracias a `usesChronometer` + `when`.
+- El cuerpo `45:00 restante (00:00 / 45:00)`, una "foto" fija del momento en
+  que se publicó la notificación (solo se re-publica al iniciar/pausar/
+  reanudar), por lo que casi siempre mostraba valores desactualizados.
+
+Además, cuando el temporizador terminaba con la app muerta o congelada en
+segundo plano, `_onTick` no se ejecutaba y nadie cancelaba la notificación:
+el cronómetro nativo seguía contando más allá de `when` y mostraba tiempos
+negativos (`-0:05`, `-0:12`...).
+
+### Solución
+En `NotificationService.showTimerNotification`:
+
+1. **Un solo tiempo en vivo**: mientras corre, el cuerpo ya no repite un
+   countdown estático; muestra `Objetivo: mm:ss` (modo countdown) o
+   `Cronómetro en curso` (modo count-up). El cronómetro nativo sigue siendo
+   el único tiempo que avanza en la pantalla de bloqueo.
+2. **En pausa**: el cuerpo sí muestra `mm:ss / mm:ss` (progreso), porque al
+   no haber cronómetro es el único indicador y su valor fijo es correcto.
+3. **`timeoutAfter`**: se configura con `remaining * 1000` ms cuando el
+   temporizador corre en modo countdown. Android auto-cancela la
+   notificación justo al llegar a `00:00`, así nunca puede mostrar
+   negativos aunque el proceso haya muerto. En pausa o en modo cronómetro
+   ascendente es `null` (la notificación persiste).
+
+### Archivos relevantes
+- `lib/core/services/notification_service.dart` - `showTimerNotification`.
+- `lib/core/services/habit_execution_service.dart` - `_syncNotification`
+  (solo se llama en cambios de estado, no cada segundo).
+
+---
+
+## IDs de alarmas/notificaciones: `String.hashCode` → `stableHash` (2026-10-13)
+
+### Problema
+Los IDs nativos de alarmas y notificaciones se generaban con
+`String.hashCode` (`raw.hashCode & 0x7FFFFFFF`). Dart **no garantiza**
+que `hashCode` sea estable entre ejecuciones de la app (seed aleatorio
+por isolate), así que tras reiniciar la app los IDs calculados eran
+distintos de los de la sesión anterior:
+
+- `cancelHabit` no encontraba las programaciones viejas → **alarmas
+  fantasma** que seguían sonando tras borrar/editar el hábito.
+- `scheduleAllHabits` programaba IDs nuevos sin cancelar los viejos →
+  **alarmas duplicadas** acumulándose.
+
+### Solución
+1. `lib/core/utils/stable_hash.dart` — hash **FNV-1a** de 32 bits,
+   determinista entre ejecuciones e isolates.
+2. `ReminderService.idFor`/`idForWeekday`, `NotificationService.snoozeHabit`
+   y `AlarmService.buildFakeAlarmSettings` usan `stableHash` enmascarado
+   a 31 bits (`& 0x7FFFFFFF`, siempre positivo).
+3. **Migración única** en `ReminderService.scheduleAllHabits`
+   (`_migrateToStableIds`): la primera vez que corre tras el cambio,
+   ejecuta `Alarm.stopAll()` + `NotificationService.cancelAll()` para
+   purgar las programaciones huérfanas del esquema viejo, y marca el flag
+   `stable_reminder_ids_v1` en SharedPreferences. Justo después el propio
+   `scheduleAllHabits` reprograma todo con los IDs estables. Efecto
+   secundario aceptado: mata alarmas de utilidad en curso y la
+   notificación del temporizador (se repone sola).
+
+### Relacionado: IDs fijos para alarmas de utilidad (mismo día)
+Los contadores `_utilityAlarmId`/`_utilityNotificationId` de
+`AlarmService` se reiniciaban en cada arranque, dejando alarmas de
+utilidad huérfanas; además `IntervalTimerService` acumulaba una
+notificación por fase sin cancelar las anteriores. Se reemplazaron por
+**IDs fijos por dueño** (`AlarmService.utilityAlarmId` = 900001 y
+`focusTimerNotificationId`/`intervalTimerNotificationId`/
+`eyeCareNotificationId`/`habitEyeCareNotificationId` = 910001-910004):
+programar con el mismo ID reemplaza la programación anterior (máx. 1
+pendiente por utilidad) y las cancelaciones funcionan tras reiniciar la
+app. `setUtilityNotification` ahora exige `id:` y ya no devuelve nada.
+
+### Archivos relevantes
+- `lib/core/utils/stable_hash.dart` - `stableHash` (FNV-1a).
+- `lib/core/services/reminder_service.dart` - `idFor`, `idForWeekday`,
+  `_migrateToStableIds`.
+- `lib/core/services/notification_service.dart` - `snoozeHabit`,
+  `cancelAll`.
+- `lib/core/services/alarm_service.dart` - `buildFakeAlarmSettings`.
+
+---
+
+## Errores detectados y corregidos (2026-10-13)
+
+Auditoría de lógica tras el rediseño del sistema de IDs. Todos los
+errores de esta sección fueron **corregidos el mismo día**; se conserva
+el análisis porque sus lecciones aplican a la próxima app.
+
+### 1. Las rachas y el historial morían a los 90 días ✅ corregido
+
+**Problema:** `HabitsRepository._cleanupOldLogs` borraba los
+`HabitLog` con más de **90 días**, pero `HabitStreakCalculator`
+(`_maxDaysBack = 730`) y el calendario/historial del detalle se alimentan
+exclusivamente de esos logs. En el día 91 una racha de 100+ días se
+borraba y el calendario perdía historial. Castigaba a los usuarios más
+constantes.
+
+**Fix aplicado:** retención subida a **730 días** (alineada con
+`_maxDaysBack`) en `_cleanupOldLogs`.
+
+**Lección para la próxima app:** la política de retención de datos debe
+ser coherente con las métricas que dependen de ellos. Opciones:
+(a) retener logs ≥ la ventana máxima que usan las métricas;
+(b) si hay que podar, persistir **agregados** (racha actual/mejor,
+contadores por mes) antes de borrar el detalle;
+(c) guardar solo logs de días con actividad (ya se hace) para que el
+volumen nunca sea un problema real.
+
+### 2. Quitar un recordatorio dejaba sus alarmas sonando ✅ corregido
+
+**Problema:** `ReminderService.cancelHabit` solo cancela los índices
+`0..reminders.length-1` de la lista **nueva**. Si un hábito pasaba de 3 a
+2 recordatorios (en `RemindersListScreen` o `EditHabitScreen`), las
+programaciones del índice eliminado quedaban huérfanas: seguían sonando
+y, las semanales, se auto-reprogramaban cada 7 días.
+
+**Causa raíz:** los IDs nativos se derivan del **índice** del
+recordatorio en la lista (`idFor(habit, i, ...)`) y la cancelación se
+hacía contra el modelo ya editado.
+
+**Fix aplicado:** `RemindersListScreen._deleteReminder` y
+`EditHabitScreen` ahora hacen `cancelHabit(habitAnterior)` →
+`updateHabit` → `scheduleHabit(nuevo)`, en ese orden.
+
+**Lección para la próxima app:**
+- Cancelar siempre contra el **estado anterior persistido**, no contra el
+  modelo nuevo (`cancelHabit(oldHabit)` antes de `updateHabit`).
+- Mejor aún: dar a cada recordatorio un **ID propio estable** (uuid al
+  crearlo) en vez de derivarlo del índice — así borrar/reordenar no
+  rompe la correspondencia con lo programado.
+- Las operaciones destructivas que reemplazan estado (importar backup,
+  editar) deben hacer **wipe + reprogramar**, no solo reprogramar.
+
+### 3. Importar backup dejaba las alarmas de los hábitos antiguos ✅
+
+**Problema:** `user_profile_screen._import` hacía `reload()` +
+`scheduleAllHabits()`, pero `scheduleAllHabits` nunca cancela (por
+diseño, para no interferir con alarmas sonando). Las alarmas de los
+hábitos pre-importación seguían sonando aunque ya no existieran.
+
+**Fix aplicado:** nuevo `ReminderService.rescheduleAllFromScratch()`
+(`Alarm.stopAll()` + `NotificationService.cancelAll()` +
+`scheduleAllHabits()`), usado tras `reload()` en la importación — mismo
+patrón que `_migrateToStableIds`.
+
+### 4. Importar un backup corrupto reseteaba a los hábitos de ejemplo ✅
+
+**Problema:** `BackupService.import` validaba solo el envoltorio
+(`app`/`version`/presencia de claves), no que el JSON interno parsee.
+Si `habits` venía corrupto, `_load` capturaba la excepción →
+`_resetDefaultHabits` → los 5 hábitos de ejemplo **sobrescribían** los
+datos reales sin aviso.
+
+**Fix aplicado (doble capa):**
+- `BackupService.import` hace `jsonDecode` de las 3 claves y exige que
+  cada una sea una lista **antes** de escribir en storage; si alguna
+  falla lanza `BackupException` sin tocar los datos.
+- `_load` ya no persiste los defaults cuando una clave existente no
+  parsea (usa defaults solo en memoria), así un re-import puede
+  recuperar los datos reales.
+
+### Edge cases menores (misma auditoría) ✅ corregidos
+
+- `'Repetir'`/`'Algunas veces por período'` sin `startDate`:
+  `isScheduledFor` usaba `base = start ?? target` → `diff = 0` →
+  `0 % interval == 0` → se comportaba como *todos los días*. **Fix:**
+  `Habit.fromJson` ancla `startDate = DateTime.now()` cuando falta y hay
+  `repeatInterval` (el día de carga pasa a ser el día 0 del ciclo).
+- `HabitExecutionService.restoreSession` no restauraba el cuidado
+  visual: el toggle quedaba apagado pero la notificación nativa sonaba
+  igual. **Fix:** `_eyeCareEnabled`/`_eyeCareWorkPhase`/
+  `_eyeCareRemaining` se persisten dentro del JSON de sesión y se
+  restauran; si la sesión restaurada no lleva cuidado visual activo se
+  cancela el aviso nativo pendiente (ID fijo).
+- Hábito de cantidad con `unit` pero sin `target`: `evaluationType` lo
+  infiere como `amount`, pero `isDone` siempre era `false`. **Fix:** en
+  `incrementHabitAmount`/`setHabitAmount`, sin target cualquier
+  progreso `> 0` cuenta como completado.
+- `_resetDailyCompletion` solo sincronizaba si `isCompleted` difería.
+  **Fix:** ahora sincroniza `isCompleted` + `current` +
+  `completedChecklist` + `yesNo` contra el log del día si cualquiera
+  difiere.
+
+### Lecciones transversales para la próxima app
+
+1. **IDs nativos deterministas**: nunca `String.hashCode`; hash propio
+   (`stableHash`, FNV-1a) o IDs explícitos persistidos en el modelo.
+2. **Identidad por entidad, no por posición**: derivar IDs del índice en
+   una lista rompe cancelaciones al borrar/reordenar.
+3. **Wipe + reprogramar** en toda operación destructiva (editar,
+   importar, migrar): reprogramar sin cancelar deja fantasmas.
+4. **Retención coherente con métricas derivadas** (ver #1).
+5. **Validar antes de escribir**: un backup/feed corrupto nunca debe
+   poder sustituir datos buenos por defaults (ver #4).
+6. **`copyWith` con sentinel** (`_unset`) en todos los campos nullable
+   que el usuario pueda querer limpiar, no solo en algunos.
+7. **La UI no debe prometer lo que el modelo no evalúa**: `condition`
+   ("Al menos/Menos de...") y `timesPerPeriod` se muestran/guardan pero
+   no afectan `isCompleted`/`isScheduledFor` — o se implementan o se
+   quitan.
+
+---
+
+## «Mi porqué» — motivación por hábito (2026-10-13)
+
+Cada hábito puede guardar su propia motivación, independiente de los
+demás. Se llama «Mi porqué» / «Tu porqué» (nunca «Recordatorio»: ese
+nombre ya lo usan las alarmas).
+
+### Modelo
+Tres campos nullable en `Habit` (`whyPhrase`, `whyGoal`,
+`whyImagePath`) + getter `hasWhy`. En `copyWith` usan el sentinel
+`_unset` (tipo `Object?`) para poder limpiarlos pasando `null`
+explícito — patrón distinto al resto de campos, que no se pueden
+limpiar. `toJson`/`fromJson` los persisten sin migración (nullable).
+
+### UI
+- `lib/features/habits/presentation/widgets/habit_why_sheet.dart` —
+  `HabitWhySheet.show(context, habitId)`: bottom sheet flotante con la
+  imagen (16:9) + frase superpuesta, tarjeta de meta personal, y tres
+  botones (Imagen/Frase/Meta) que editan cada parte al instante vía
+  `HabitsRepository().updateHabit()`. Se apila sobre el completion
+  sheet; «Volver al hábito» solo hace `pop`.
+- Entradas: estrella ★ en el header del `HabitCompletionBottomSheet`
+  (rellena si `hasWhy`), fila «¿Por qué lo haces?» al pie del sheet, y
+  tile «Mi porqué» en `EditHabitScreen`.
+
+### Trampas resueltas
+- `EditHabitScreen._save` y `CreateHabitDialog._createHabit` reconstruyen
+  el `Habit` completo: hay que copiar los `why*` desde el hábito fresco
+  del repositorio o se pierden al guardar.
+- `whyImagePath` se registró en `MediaCleanupService._collectReferencedPaths`
+  y `_cleanupHabitMediaDiff` — sin eso, cambiar/quitar la imagen dejaba
+  archivos huérfanos y podía borrarse una imagen compartida.
+- `ImagePickerService.pickImage` acepta ahora `aspectRatioX/Y`,
+  `cropPreset` y `lockAspectRatio` (la imagen del porqué se recorta a
+  16:9; el resto de llamadas siguen con 1:1 por defecto).
+
+---
+
+## Tutorial de onboarding (2026-10-13)
+
+`OnboardingScreen` (`lib/features/onboarding/presentation/`): carrusel
+`PageView` de 5 slides (bienvenida, crear hábito, registrar progreso,
+recordatorios, «Tu porqué») con dots animados, «Omitir» y botón final
+«Crear mi primer hábito» que abre el `CreateHabitDialog` **desde el
+propio onboarding** (su contexto sí está dentro del Navigator; el
+`rootNavigatorKey.currentContext` NO sirve para `showDialog`).
+
+### Activación
+- `SunHabitApp._maybeShowOnboarding` (post-frame en `initState`): si el
+  flag `onboarding_seen_v1` de `StorageService` no está a `'1'` y no hay
+  alarma sonando, llama a `OnboardingScreen.launch()` (push sobre
+  `AppRouter.rootNavigatorKey`) y luego guarda el flag.
+- Re-lanzable desde Ajustes → «Ver tutorial» (sección Ayuda).
 

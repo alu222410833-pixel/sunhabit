@@ -11,6 +11,7 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/habit_execution_service.dart';
+import 'package:sunhabit/core/utils/stable_hash.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
 import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
@@ -281,6 +282,11 @@ class NotificationService {
     await _plugin.cancel(id: id);
   }
 
+  /// Cancela TODAS las notificaciones programadas.
+  static Future<void> cancelAll() async {
+    await _plugin.cancelAll();
+  }
+
   /// Devuelve las notificaciones pendientes programadas. Útil para diagnosticar.
   static Future<List<PendingNotificationRequest>> pendingNotifications() async {
     return await _plugin.pendingNotificationRequests();
@@ -296,7 +302,8 @@ class NotificationService {
     if (habit == null) return;
 
     final at = DateTime.now().add(Duration(minutes: minutes));
-    final snoozeId = (habit.id.hashCode + at.minute + minutes).abs();
+    final snoozeId =
+        (stableHash(habit.id) + at.minute + minutes) & 0x7FFFFFFF;
     await schedule(id: snoozeId, at: at, habit: habit);
   }
 
@@ -320,15 +327,34 @@ class NotificationService {
     final remaining = totalSeconds > 0
         ? (totalSeconds - elapsedSeconds).clamp(0, totalSeconds)
         : elapsedSeconds;
-    final subtitle = totalSeconds > 0
-        ? '${_formatDuration(remaining)} restante (${_formatDuration(elapsedSeconds)} / ${_formatDuration(totalSeconds)})'
-        : '${_formatDuration(elapsedSeconds)} transcurrido';
+    // Mientras corre, el cronómetro nativo ya muestra el tiempo en vivo;
+    // el cuerpo solo indica el objetivo para no duplicar un tiempo estático
+    // que quedaría desactualizado. En pausa no hay cronómetro, así que el
+    // cuerpo sí muestra el progreso (correcto al ser un valor fijo).
+    final String subtitle;
+    if (isPaused) {
+      subtitle = totalSeconds > 0
+          ? '${_formatDuration(elapsedSeconds.clamp(0, totalSeconds))} / ${_formatDuration(totalSeconds)}'
+          : '${_formatDuration(elapsedSeconds)} transcurrido';
+    } else {
+      subtitle = totalSeconds > 0
+          ? 'Objetivo: ${_formatDuration(totalSeconds)}'
+          : 'Cronómetro en curso';
+    }
 
     final int whenMs = isPaused
         ? DateTime.now().millisecondsSinceEpoch
         : (totalSeconds > 0
             ? DateTime.now().millisecondsSinceEpoch + (remaining * 1000)
             : DateTime.now().millisecondsSinceEpoch - (elapsedSeconds * 1000));
+
+    // Auto-cancelar la notificación justo cuando el cronómetro llega a
+    // cero. Si el proceso muere en segundo plano nadie ejecuta finishTimer,
+    // y sin esto el cronómetro seguiría contando en negativo.
+    final int? timeoutMs =
+        (!isPaused && totalSeconds > 0 && remaining > 0)
+            ? remaining * 1000
+            : null;
 
     await _plugin.show(
       id: _timerNotificationId,
@@ -350,6 +376,7 @@ class NotificationService {
           chronometerCountDown: !isPaused && totalSeconds > 0,
           when: whenMs,
           showWhen: true,
+          timeoutAfter: timeoutMs,
           actions: [
             AndroidNotificationAction(
               isPaused ? 'timer_resume' : 'timer_pause',

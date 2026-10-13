@@ -8,6 +8,7 @@ import 'package:sunhabit/features/habits/presentation/habit_completion_bottom_sh
 import 'package:sunhabit/features/habits/presentation/habit_completion_bottom_sheet/timer_section.dart';
 import 'package:sunhabit/features/habits/presentation/habit_completion_bottom_sheet/yes_no_section.dart';
 import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
+import 'package:sunhabit/features/habits/presentation/widgets/habit_why_sheet.dart';
 
 /// Bottom sheet flotante para completar un hábito según su tipo de evaluación.
 ///
@@ -133,6 +134,8 @@ class _HabitCompletionBottomSheetState
                 const SizedBox(height: 20),
                 _buildBody(habit),
                 const SizedBox(height: 16),
+                _buildWhyEntry(context, habit),
+                const SizedBox(height: 6),
               ],
             ),
           ),
@@ -185,10 +188,74 @@ class _HabitCompletionBottomSheetState
           ),
         ),
         IconButton(
+          icon: Icon(
+            habit.hasWhy ? Icons.star_rounded : Icons.star_outline_rounded,
+            color: habit.hasWhy ? AppColors.star : AppColors.textSecondary,
+          ),
+          tooltip: 'Mi porqué',
+          onPressed: () => HabitWhySheet.show(context, habit.id),
+        ),
+        IconButton(
           icon: const Icon(Icons.close_rounded),
           onPressed: () => Navigator.of(context).pop(),
         ),
       ],
+    );
+  }
+
+  /// Entrada a «Mi porqué»: acceso directo a la motivación del hábito
+  /// sin abandonar el registro.
+  Widget _buildWhyEntry(BuildContext context, Habit habit) {
+    final textTheme = Theme.of(context).textTheme;
+    return GestureDetector(
+      onTap: () => HabitWhySheet.show(context, habit.id),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: AppDecorations.card,
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.star.withValues(alpha: 0.12),
+              ),
+              alignment: Alignment.center,
+              child: const Icon(
+                Icons.lightbulb_outline_rounded,
+                color: AppColors.star,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '¿Por qué lo haces?',
+                    style: textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    habit.hasWhy
+                        ? 'Toca para ver tu motivación.'
+                        : 'Recuerda tu meta y mantén la motivación.',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.textSecondary,
+            ),
+          ],
+        ),
+      ),
     );
   }
 

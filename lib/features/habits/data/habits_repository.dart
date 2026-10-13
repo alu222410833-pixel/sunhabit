@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' hide Category;
 import 'package:flutter/material.dart';
 import 'package:sunhabit/core/services/media_cleanup_service.dart';
 import 'package:sunhabit/core/services/storage_service.dart';
@@ -169,8 +170,10 @@ class HabitsRepository extends ChangeNotifier {
               .map((e) => Category.fromJson(e as Map<String, dynamic>)));
       } catch (e, st) {
         debugPrint('[HabitsRepository] Error loading categories: $e\n$st');
+        // Usar defaults en memoria pero NO guardar: persistir los
+        // defaults sobre JSON corrupto destruiría los datos reales,
+        // que aún podrían recuperarse reimportando un backup.
         _resetDefaultCategories();
-        shouldSave = true;
       }
     }
 
@@ -186,8 +189,8 @@ class HabitsRepository extends ChangeNotifier {
               decoded.map((e) => Habit.fromJson(e as Map<String, dynamic>)));
       } catch (e, st) {
         debugPrint('[HabitsRepository] Error loading habits: $e\n$st');
+        // Usar defaults en memoria pero NO guardar (ver categorías).
         _resetDefaultHabits();
-        shouldSave = true;
       }
     }
 
@@ -217,8 +220,13 @@ class HabitsRepository extends ChangeNotifier {
   /// `_load()`/`_save()`/`_resetDailyCompletion()`/`getHabitsForDate()` al
   /// acumular cientos de entradas tras semanas de uso.
   ///
+  /// La retención debe ser >= `HabitStreakCalculator._maxDaysBack` (730
+  /// días): los logs alimentan las rachas, el calendario y el historial,
+  /// así que podarlos antes rompería rachas largas y borraría historial
+  /// de los usuarios más constantes.
+  ///
   /// Devuelve el número de logs eliminados.
-  int _cleanupOldLogs({int daysToKeep = 90}) {
+  int _cleanupOldLogs({int daysToKeep = 730}) {
     if (_logs.isEmpty) return 0;
     final cutoff = DateTime.now().subtract(Duration(days: daysToKeep));
     final before = _logs.length;
@@ -248,13 +256,26 @@ class HabitsRepository extends ChangeNotifier {
       final todayLog = _findLogForDate(habit.id, today);
 
       if (todayLog != null) {
-        // Ya hay un registro de hoy: respetar el estado guardado en el log.
-        if (habit.isCompleted != todayLog.isCompleted) {
+        // Ya hay un registro de hoy: sincronizar TODOS los campos
+        // diarios con el log, no solo isCompleted. Si isCompleted ya
+        // coincide pero current/completedChecklist/yesNo difieren,
+        // quedarían desincronizados de lo persistido.
+        final logCurrent = todayLog.currentValue ?? habit.current;
+        final logChecklist =
+            todayLog.completedChecklist ?? habit.completedChecklist;
+        // En hábitos sí/no el yesNo ES el isCompleted del log.
+        final logYesNo = habit.evaluationType == HabitEvaluationType.yesNo
+            ? todayLog.isCompleted
+            : habit.yesNo;
+        if (habit.isCompleted != todayLog.isCompleted ||
+            habit.current != logCurrent ||
+            !listEquals(habit.completedChecklist, logChecklist) ||
+            habit.yesNo != logYesNo) {
           _habits[i] = habit.copyWith(
             isCompleted: todayLog.isCompleted,
-            current: todayLog.currentValue ?? habit.current,
-            completedChecklist:
-                todayLog.completedChecklist ?? habit.completedChecklist,
+            current: logCurrent,
+            completedChecklist: logChecklist,
+            yesNo: logYesNo,
           );
           changed = true;
         }
@@ -561,7 +582,9 @@ class HabitsRepository extends ChangeNotifier {
       final habit = _habits[index];
       final currentVal = habit.current ?? 0;
       final newVal = (currentVal + delta).clamp(0, 999999);
-      final isDone = habit.target != null ? newVal >= habit.target! : false;
+      // Sin target, cualquier progreso > 0 cuenta como completado;
+      // si no, un hábito de cantidad sin objetivo jamás podría marcarse.
+      final isDone = habit.target != null ? newVal >= habit.target! : newVal > 0;
       _habits[index] = habit.copyWith(
         current: newVal,
         isCompleted: isDone,
@@ -576,7 +599,8 @@ class HabitsRepository extends ChangeNotifier {
     if (index != -1) {
       final habit = _habits[index];
       final current = amount.clamp(0, 999999);
-      final isDone = habit.target != null ? current >= habit.target! : false;
+      // Sin target, cualquier progreso > 0 cuenta como completado.
+      final isDone = habit.target != null ? current >= habit.target! : current > 0;
       _habits[index] = habit.copyWith(
         current: current,
         isCompleted: isDone,
@@ -671,12 +695,14 @@ class HabitsRepository extends ChangeNotifier {
   void _cleanupHabitMediaDiff(Habit previous, Habit? updated) {
     final oldPaths = <String?>[
       previous.imagePath,
+      previous.whyImagePath,
       ...previous.reminders.map((r) => r.soundPath),
     ];
     final newPaths = updated == null
         ? const <String?>[]
         : <String?>[
             updated.imagePath,
+            updated.whyImagePath,
             ...updated.reminders.map((r) => r.soundPath),
           ];
     MediaCleanupService.instance.deleteUnused(

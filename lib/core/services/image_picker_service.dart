@@ -18,6 +18,10 @@ class ImagePickerService {
     int maxWidth = 1024,
     int maxHeight = 1024,
     int compressQuality = 85,
+    double aspectRatioX = 1,
+    double aspectRatioY = 1,
+    CropAspectRatioPreset cropPreset = CropAspectRatioPreset.square,
+    bool lockAspectRatio = true,
   }) async {
     try {
       final picked = await _picker.pickImage(
@@ -31,7 +35,7 @@ class ImagePickerService {
 
       final cropped = await ImageCropper().cropImage(
         sourcePath: picked.path,
-        aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
+        aspectRatio: CropAspectRatio(ratioX: aspectRatioX, ratioY: aspectRatioY),
         compressQuality: compressQuality,
         uiSettings: [
           AndroidUiSettings(
@@ -40,13 +44,14 @@ class ImagePickerService {
             toolbarWidgetColor: AppColors.neonGreen,
             statusBarLight: true,
             backgroundColor: AppColors.backgroundDark,
-            initAspectRatio: CropAspectRatioPreset.square,
-            lockAspectRatio: true,
+            initAspectRatio: cropPreset,
+            lockAspectRatio: lockAspectRatio,
             hideBottomControls: false,
           ),
           IOSUiSettings(
             title: 'Ajustar imagen',
-            aspectRatioLockEnabled: true,
+            aspectRatioLockEnabled: lockAspectRatio,
+            aspectRatioPresets: [cropPreset],
             minimumAspectRatio: 1.0,
           ),
         ],

@@ -18,7 +18,6 @@ class FocusTimerService extends ChangeNotifier {
 
   Timer? _timer;
   DateTime? _endTime;
-  int? _notificationId;
 
   void setInput(int hours, int minutes, int seconds) {
     if (running) return;
@@ -38,7 +37,8 @@ class FocusTimerService extends ChangeNotifier {
     running = true;
     _endTime = DateTime.now().add(Duration(seconds: remaining));
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
-    _notificationId = AlarmService.instance.setUtilityNotification(
+    AlarmService.instance.setUtilityNotification(
+      id: AlarmService.focusTimerNotificationId,
       durationSeconds: remaining,
       title: 'Temporizador',
       body: 'El temporizador ha terminado',
@@ -61,10 +61,9 @@ class FocusTimerService extends ChangeNotifier {
   }
 
   void _cancelNotification() {
-    if (_notificationId != null) {
-      AlarmService.instance.cancelUtilityNotificationById(_notificationId!);
-      _notificationId = null;
-    }
+    AlarmService.instance.cancelUtilityNotificationById(
+      AlarmService.focusTimerNotificationId,
+    );
   }
 
   void pause() {

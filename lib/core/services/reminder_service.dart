@@ -1,6 +1,9 @@
+import 'package:alarm/alarm.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/notification_service.dart';
+import 'package:sunhabit/core/utils/stable_hash.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
 
@@ -23,11 +26,15 @@ class ReminderService {
 
   /// Genera un ID único y estable para un recordatorio de un hábito en una
   /// fecha concreta. Se usa tanto para notificaciones como para alarmas.
+  ///
+  /// Usa [stableHash] (FNV-1a) en lugar de `String.hashCode`, que no es
+  /// estable entre ejecuciones de la app y dejaba programaciones
+  /// imposibles de cancelar (alarmas fantasma/duplicadas).
   int idFor(Habit habit, int reminderIndex, DateTime date) {
     final raw = '${habit.id}_$reminderIndex'
         '_${date.year}${date.month.toString().padLeft(2, '0')}'
         '${date.day.toString().padLeft(2, '0')}';
-    return raw.hashCode & 0x7FFFFFFF;
+    return stableHash(raw) & 0x7FFFFFFF;
   }
 
   /// Genera un ID único y estable para una alarma semanal de un hábito.
@@ -37,7 +44,7 @@ class ReminderService {
   /// semanal del ID diario generado por [idFor].
   int idForWeekday(Habit habit, int reminderIndex, int weekday) {
     final raw = '${habit.id}_${reminderIndex}_w$weekday';
-    return raw.hashCode & 0x7FFFFFFF;
+    return stableHash(raw) & 0x7FFFFFFF;
   }
 
   /// Devuelve `true` si la frecuencia del hábito es compatible con alarmas
@@ -185,6 +192,7 @@ class ReminderService {
   ///
   /// Devuelve el número de recordatorios programados con éxito.
   Future<int> scheduleAllHabits() async {
+    await _migrateToStableIds();
     var scheduled = 0;
     final habits = HabitsRepository().getHabits();
     final now = DateTime.now();
@@ -252,6 +260,44 @@ class ReminderService {
       }
     }
     return scheduled;
+  }
+
+  /// Borra TODAS las programaciones nativas (alarmas y notificaciones)
+  /// y las recrea desde cero para los hábitos actuales.
+  ///
+  /// Se usa tras operaciones destructivas como importar un backup:
+  /// [scheduleAllHabits] nunca cancela lo que ya existe, así que los
+  /// hábitos reemplazados/eliminados seguirían sonando.
+  ///
+  /// Devuelve el número de recordatorios programados con éxito.
+  Future<int> rescheduleAllFromScratch() async {
+    await Alarm.stopAll();
+    await NotificationService.cancelAll();
+    return scheduleAllHabits();
+  }
+
+  /// Clave de SharedPreferences que marca que la limpieza de
+  /// programaciones con IDs inestables (basados en `String.hashCode`)
+  /// ya se ejecutó.
+  static const _stableIdsMigrationKey = 'stable_reminder_ids_v1';
+  bool _stableIdsMigrated = false;
+
+  /// Borra TODAS las alarmas y notificaciones programadas una sola vez.
+  ///
+  /// Los IDs antiguos usaban `String.hashCode`, inestable entre
+  /// ejecuciones: las programaciones previas no se podían cancelar y
+  /// quedaban huérfanas (o se duplicaban al reprogramar con IDs nuevos).
+  /// Tras el borrado, el propio [scheduleAllHabits] reprograma todo con
+  /// los nuevos IDs estables de [stableHash].
+  Future<void> _migrateToStableIds() async {
+    if (_stableIdsMigrated) return;
+    _stableIdsMigrated = true;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_stableIdsMigrationKey) ?? false) return;
+    await Alarm.stopAll();
+    await NotificationService.cancelAll();
+    await prefs.setBool(_stableIdsMigrationKey, true);
+    debugPrint('[ReminderService] migración a IDs estables ejecutada');
   }
 
   /// Cancela todos los recordatorios futuros de un hábito.

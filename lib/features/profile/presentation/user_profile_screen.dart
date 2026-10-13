@@ -30,7 +30,9 @@ class UserProfileScreen extends StatelessWidget {
       if (!context.mounted) return;
       if (imported) {
         await HabitsRepository().reload();
-        await ReminderService.instance.scheduleAllHabits();
+        // Wipe + reprogramar: los hábitos reemplazados por el backup
+        // dejarían alarmas huérfanas si solo se reprograma encima.
+        await ReminderService.instance.rescheduleAllFromScratch();
         if (!context.mounted) return;
         _showSnackBar(context, 'Backup importado correctamente.');
       }

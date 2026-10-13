@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:alarm/alarm.dart';
 import 'package:alarm/utils/alarm_set.dart';
 
+import 'package:sunhabit/core/utils/stable_hash.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
 
@@ -16,11 +17,18 @@ class AlarmService {
   AlarmService._internal();
   static final AlarmService instance = AlarmService._internal();
 
-  static const int _utilityAlarmBaseId = 900000;
-  int _utilityAlarmId = _utilityAlarmBaseId;
-
-  static const int _utilityNotificationBaseId = 910000;
-  int _utilityNotificationId = _utilityNotificationBaseId;
+  /// IDs fijos para las alarmas y notificaciones de utilidad.
+  ///
+  /// Cada "dueño" usa un ID único y estable entre ejecuciones. Programar
+  /// con el mismo ID reemplaza la programación anterior de ese dueño (a lo
+  /// sumo una pendiente por utilidad) y las cancelaciones funcionan aunque
+  /// la app se reinicie — antes se usaban contadores en memoria que se
+  /// reiniciaban en cada arranque y dejaban alarmas huérfanas.
+  static const int utilityAlarmId = 900001;
+  static const int focusTimerNotificationId = 910001;
+  static const int intervalTimerNotificationId = 910002;
+  static const int eyeCareNotificationId = 910003;
+  static const int habitEyeCareNotificationId = 910004;
 
   /// Inicializa el paquete `alarm`. Debe llamarse en `main()` antes de usar
   /// cualquier otro método.
@@ -139,7 +147,7 @@ class AlarmService {
   /// desde una notificación (que no tiene `AlarmSettings` real).
   AlarmSettings buildFakeAlarmSettings(Habit habit) {
     return AlarmSettings(
-      id: habit.id.hashCode,
+      id: stableHash(habit.id) & 0x7FFFFFFF,
       dateTime: DateTime.now(),
       assetAudioPath: null,
       loopAudio: false,
@@ -169,12 +177,11 @@ class AlarmService {
       return;
     }
 
-    _utilityAlarmId++;
     final at = DateTime.now().add(Duration(seconds: durationSeconds));
 
     unawaited(Alarm.set(
       alarmSettings: AlarmSettings(
-        id: _utilityAlarmId,
+        id: utilityAlarmId,
         dateTime: at,
         loopAudio: false,
         vibrate: true,
@@ -194,24 +201,25 @@ class AlarmService {
   /// pero usa el sonido por defecto del sistema para alertar al usuario.
   /// Incluye un botón 'Detener' para que el usuario pueda silenciarla.
   ///
-  /// Devuelve el identificador de la alarma programada, útil para cancelarla
-  /// de forma selectiva con [cancelUtilityNotificationById].
-  int setUtilityNotification({
+  /// [id] debe ser uno de los IDs fijos por dueño (ver las constantes
+  /// `*NotificationId` de esta clase); al reutilizar el mismo ID se
+  /// reemplaza la programación anterior de ese dueño.
+  void setUtilityNotification({
+    required int id,
     required int durationSeconds,
     required String body,
     String? title,
   }) {
     if (durationSeconds <= 0) {
-      cancelUtilityNotification();
-      return _utilityNotificationId;
+      cancelUtilityNotificationById(id);
+      return;
     }
 
-    _utilityNotificationId++;
     final at = DateTime.now().add(Duration(seconds: durationSeconds));
 
     unawaited(Alarm.set(
       alarmSettings: AlarmSettings(
-        id: _utilityNotificationId,
+        id: id,
         dateTime: at,
         assetAudioPath: null,
         loopAudio: false,
@@ -229,8 +237,6 @@ class AlarmService {
         ),
       ),
     ));
-
-    return _utilityNotificationId;
   }
 
   /// Cancela una notificación de utilidad programada con [id].
@@ -240,11 +246,6 @@ class AlarmService {
 
   /// Cancela la alarma de utilidad actual.
   void cancelUtilityAlarm() {
-    unawaited(Alarm.stop(_utilityAlarmId));
-  }
-
-  /// Cancela la notificación de utilidad actual.
-  void cancelUtilityNotification() {
-    unawaited(Alarm.stop(_utilityNotificationId));
+    unawaited(Alarm.stop(utilityAlarmId));
   }
 }

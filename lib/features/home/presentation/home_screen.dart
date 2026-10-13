@@ -8,13 +8,12 @@ import 'package:sunhabit/core/theme/app_decorations.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
 import 'package:sunhabit/features/habits/presentation/create_habit/create_habit_dialog.dart';
-import 'package:sunhabit/features/habits/presentation/create_habit/express_habit_dialog.dart';
 import 'package:sunhabit/features/habits/presentation/habit_completion_bottom_sheet.dart';
 import 'package:sunhabit/features/home/presentation/widgets/home_bottom_nav.dart';
 import 'package:sunhabit/features/home/presentation/widgets/home_date_row.dart';
 import 'package:sunhabit/features/home/presentation/widgets/home_habit_tile.dart';
 import 'package:sunhabit/features/home/presentation/widgets/home_summary_card.dart';
-import 'package:sunhabit/features/home/presentation/widgets/reminders_list_sheet.dart';
+import 'package:sunhabit/features/home/presentation/reminders_list_screen.dart';
 
 /// Pantalla principal de la aplicación.
 ///
@@ -152,29 +151,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Abre el diálogo rápido de creación de hábito.
+  /// Abre el wizard de creación de hábito.
   ///
-  /// Si el usuario cierra el diálogo sin guardar, se abre el formulario
-  /// completo. Cuando se guarda, se añade el hábito y se programa su
-  /// recordatorio.
+  /// Cuando se guarda, se añade el hábito y se programa su recordatorio.
   Future<void> _openCreateHabit(BuildContext context) async {
     final categories = HabitsRepository().getCategories();
     final result = await showDialog<Habit?>(
       context: context,
-      builder: (dialogContext) => ExpressHabitDialog(categories: categories),
+      builder: (dialogContext) => CreateHabitDialog(categories: categories),
     );
-
-    if (result == null && context.mounted) {
-      final detailedResult = await showDialog<Habit?>(
-        context: context,
-        builder: (dialogContext) => CreateHabitDialog(categories: categories),
-      );
-      if (detailedResult != null && context.mounted) {
-        await HabitsRepository().addHabit(detailedResult);
-        unawaited(ReminderService.instance.scheduleHabit(detailedResult));
-      }
-      return;
-    }
 
     if (result != null && context.mounted) {
       await HabitsRepository().addHabit(result);
@@ -310,7 +295,12 @@ class _HomeScreenState extends State<HomeScreen> {
             clipBehavior: Clip.none,
             children: [
               IconButton(
-                onPressed: () => showRemindersListSheet(context),
+                onPressed: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const RemindersListScreen(),
+                      ),
+                    ),
                 icon: const Icon(Icons.notifications_none_rounded),
               ),
               const Positioned(

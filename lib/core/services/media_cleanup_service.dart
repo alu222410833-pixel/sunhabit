@@ -55,6 +55,9 @@ class MediaCleanupService {
       if (habit.imagePath != null && habit.imagePath!.isNotEmpty) {
         paths.add(habit.imagePath!);
       }
+      if (habit.whyImagePath != null && habit.whyImagePath!.isNotEmpty) {
+        paths.add(habit.whyImagePath!);
+      }
       for (final reminder in habit.reminders) {
         if (reminder.soundPath != null && reminder.soundPath!.isNotEmpty) {
           paths.add(reminder.soundPath!);

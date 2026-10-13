@@ -118,7 +118,9 @@ class IntervalTimerService extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
     _phaseEndTime = null;
-    AlarmService.instance.cancelUtilityNotification();
+    AlarmService.instance.cancelUtilityNotificationById(
+      AlarmService.intervalTimerNotificationId,
+    );
     running = false;
     notifyListeners();
   }
@@ -127,7 +129,9 @@ class IntervalTimerService extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
     _phaseEndTime = null;
-    AlarmService.instance.cancelUtilityNotification();
+    AlarmService.instance.cancelUtilityNotificationById(
+      AlarmService.intervalTimerNotificationId,
+    );
     currentRound = 1;
     isWork = true;
     remaining = workSeconds;
@@ -182,6 +186,7 @@ class IntervalTimerService extends ChangeNotifier {
   void _scheduleUtilityNotification() {
     if (finished || remaining <= 0) return;
     AlarmService.instance.setUtilityNotification(
+      id: AlarmService.intervalTimerNotificationId,
       durationSeconds: remaining,
       title: _notificationTitle,
       body: _notificationBody,

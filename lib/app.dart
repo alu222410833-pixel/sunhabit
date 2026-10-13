@@ -8,8 +8,10 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/reminder_service.dart';
+import 'package:sunhabit/core/services/storage_service.dart';
 import 'package:sunhabit/core/theme/app_theme.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
+import 'package:sunhabit/features/onboarding/presentation/onboarding_screen.dart';
 
 /// Widget raíz de la aplicación.
 /// Configura el tema, las rutas y el comportamiento general de la app.
@@ -42,6 +44,7 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
     _alarmSub = AlarmService.instance.ringingStream.listen(_onRingingChanged);
     _startDayChangeWatcher();
     _startScheduleWatcher();
+    _maybeShowOnboarding();
   }
 
   @override
@@ -136,6 +139,32 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
         break;
       }
     }
+  }
+
+  /// Muestra el tutorial de bienvenida la primera vez que se abre la app.
+  ///
+  /// El flag `onboarding_seen_v1` se persiste en [StorageService]; el
+  /// tutorial también se puede re-lanzar desde Ajustes.
+  void _maybeShowOnboarding() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // No interponer el tutorial si hay una alarma sonando al arrancar.
+      if (AlarmService.instance.ringingAlarms.isNotEmpty) return;
+      String? seen;
+      try {
+        seen =
+            await StorageService().getString(OnboardingScreen.seenFlagKey);
+      } catch (_) {
+        return; // Storage no inicializado: reintentar en el próximo arranque.
+      }
+      if (seen == '1') return;
+      await OnboardingScreen.launch();
+      try {
+        await StorageService()
+            .setString(OnboardingScreen.seenFlagKey, '1');
+      } catch (_) {
+        // Si falla el guardado, el tutorial se mostrará de nuevo.
+      }
+    });
   }
 
   void _navigateToRingingAlarm() {

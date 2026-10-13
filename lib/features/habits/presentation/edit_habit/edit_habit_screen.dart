@@ -13,6 +13,7 @@ import 'package:sunhabit/features/habits/presentation/edit_habit/pickers/goal_ed
 import 'package:sunhabit/features/habits/presentation/edit_habit/pickers/reminders_editor.dart';
 import 'package:sunhabit/features/habits/presentation/edit_habit/widgets/edit_habit_text_field_tile.dart';
 import 'package:sunhabit/features/habits/presentation/edit_habit/widgets/edit_habit_tile.dart';
+import 'package:sunhabit/features/habits/presentation/widgets/habit_why_sheet.dart';
 
 class EditHabitScreen extends StatefulWidget {
   final Habit habit;
@@ -138,6 +139,9 @@ class EditHabitScreenState extends State<EditHabitScreen> {
 
     final description = _descriptionController.text.trim();
     final category = _category ?? _repository.getCategories().first;
+    // El «porqué» se edita desde HabitWhySheet y persiste al instante;
+    // leer el hábito fresco evita pisarlo con los datos de apertura.
+    final fresh = _repository.getHabitById(widget.habit.id) ?? widget.habit;
 
     final isYesNo = _evaluationType == HabitEvaluationType.yesNo;
     final isAmount = _evaluationType == HabitEvaluationType.amount;
@@ -180,10 +184,17 @@ class EditHabitScreenState extends State<EditHabitScreen> {
       startDate: _startDate,
       endDate: _endDate,
       reminders: _reminders,
+      whyPhrase: fresh.whyPhrase,
+      whyGoal: fresh.whyGoal,
+      whyImagePath: fresh.whyImagePath,
       isCompleted: widget.habit.isCompleted,
       points: widget.habit.points,
     );
 
+    // Cancelar con el hábito ANTERIOR primero: si se quitaron
+    // recordatorios, cancelar solo con la lista nueva dejaría huérfanas
+    // las alarmas de los índices eliminados.
+    await ReminderService.instance.cancelHabit(widget.habit);
     await _repository.updateHabit(updated);
     await ReminderService.instance.scheduleHabit(updated);
     if (!mounted) return;
@@ -406,6 +417,22 @@ class EditHabitScreenState extends State<EditHabitScreen> {
               label: 'Descripción',
               hint: 'Añade una descripción',
               controller: _descriptionController,
+            ),
+            const SizedBox(height: 12),
+            EditHabitTile(
+              icon: Icons.star_outline_rounded,
+              label: 'Mi porqué',
+              onTap: () => HabitWhySheet.show(context, widget.habit.id),
+              child: ListenableBuilder(
+                listenable: _repository,
+                builder: (context, _) => Text(
+                  (_repository.getHabitById(widget.habit.id) ?? widget.habit)
+                          .hasWhy
+                      ? 'Configurado'
+                      : 'Motivación personal',
+                  style: textTheme.bodyMedium,
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             EditHabitTile(

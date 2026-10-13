@@ -26,7 +26,6 @@ class EyeCareService extends ChangeNotifier {
   /// Momento (reloj real) en el que termina la fase actual.
   /// Permite recalcular el tiempo restante al volver de background.
   DateTime? _phaseEndTime;
-  int? _notificationId;
 
   String get _notificationTitle =>
       isWorkPhase ? 'Hora de descansar la vista' : 'Descanso terminado';
@@ -115,7 +114,8 @@ class EyeCareService extends ChangeNotifier {
 
   void _scheduleUtilityNotification() {
     if (!running || remaining <= 0) return;
-    _notificationId = AlarmService.instance.setUtilityNotification(
+    AlarmService.instance.setUtilityNotification(
+      id: AlarmService.eyeCareNotificationId,
       durationSeconds: remaining,
       title: _notificationTitle,
       body: _notificationBody,
@@ -123,10 +123,8 @@ class EyeCareService extends ChangeNotifier {
   }
 
   void _cancelNotification() {
-    final id = _notificationId;
-    if (id != null) {
-      AlarmService.instance.cancelUtilityNotificationById(id);
-      _notificationId = null;
-    }
+    AlarmService.instance.cancelUtilityNotificationById(
+      AlarmService.eyeCareNotificationId,
+    );
   }
 }

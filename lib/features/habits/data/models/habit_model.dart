@@ -15,6 +15,10 @@ export 'package:sunhabit/features/habits/data/models/reminder_model.dart';
 /// - Con duración estimada (campo [estimatedDuration])
 /// - Lista de ítems (campo [checklist])
 class Habit {
+  /// Sentinel para `copyWith`: distingue "no se pasó el parámetro" de
+  /// "se pasó null" para poder limpiar campos opcionales.
+  static const Object _unset = Object();
+
   final String id; // Identificador único del hábito
   final String title; // Nombre visible del hábito
   final String categoryId; // Id de la categoría a la que pertenece
@@ -45,6 +49,11 @@ class Habit {
   final DateTime? endDate; // Fecha de finalización opcional
   final List<Reminder> reminders; // Recordatorios con hora y tipo
 
+  // ---- "Mi porqué": motivación personal del hábito ----
+  final String? whyPhrase; // Frase motivacional escrita por el usuario
+  final String? whyGoal; // Meta personal que quiere conseguir
+  final String? whyImagePath; // Imagen que representa la meta
+
   bool isCompleted; // Estado de completado del día
   int points; // Puntos otorgados al completar el hábito
 
@@ -74,9 +83,18 @@ class Habit {
     this.startDate,
     this.endDate,
     this.reminders = const [],
+    this.whyPhrase,
+    this.whyGoal,
+    this.whyImagePath,
     this.isCompleted = false,
     this.points = 0,
   });
+
+  /// Indica si el hábito tiene algún contenido de "Mi porqué" configurado.
+  bool get hasWhy =>
+      (whyPhrase != null && whyPhrase!.isNotEmpty) ||
+      (whyGoal != null && whyGoal!.isNotEmpty) ||
+      (whyImagePath != null && whyImagePath!.isNotEmpty);
 
   /// Tipo de evaluación inferido o configurado para este hábito.
   HabitEvaluationType get evaluationType {
@@ -188,6 +206,9 @@ class Habit {
     DateTime? startDate,
     DateTime? endDate,
     List<Reminder>? reminders,
+    Object? whyPhrase = _unset,
+    Object? whyGoal = _unset,
+    Object? whyImagePath = _unset,
     bool? isCompleted,
     int? points,
   }) {
@@ -217,6 +238,11 @@ class Habit {
       startDate: startDate ?? this.startDate,
       endDate: endDate ?? this.endDate,
       reminders: reminders ?? this.reminders,
+      whyPhrase: whyPhrase == _unset ? this.whyPhrase : whyPhrase as String?,
+      whyGoal: whyGoal == _unset ? this.whyGoal : whyGoal as String?,
+      whyImagePath: whyImagePath == _unset
+          ? this.whyImagePath
+          : whyImagePath as String?,
       isCompleted: isCompleted ?? this.isCompleted,
       points: points ?? this.points,
     );
@@ -294,6 +320,9 @@ class Habit {
         'startDate': startDate?.toIso8601String(),
         'endDate': endDate?.toIso8601String(),
         'reminders': reminders.map((r) => r.toJson()).toList(),
+        'whyPhrase': whyPhrase,
+        'whyGoal': whyGoal,
+        'whyImagePath': whyImagePath,
         'isCompleted': isCompleted,
         'points': points,
       };
@@ -334,9 +363,13 @@ class Habit {
       timesPerPeriod: json['timesPerPeriod'] as int?,
       periodType: json['periodType'] as String?,
       repeatInterval: json['repeatInterval'] as int?,
+      // Las frecuencias por intervalo ('Repetir', 'Algunas veces por
+      // período') necesitan un ancla: sin startDate, isScheduledFor
+      // calcula diff=0 y el hábito aparecería todos los días. Se
+      // normaliza tomando la fecha de carga como día 0.
       startDate: json['startDate'] != null
           ? DateTime.parse(json['startDate'] as String)
-          : null,
+          : (json['repeatInterval'] != null ? DateTime.now() : null),
       endDate: json['endDate'] != null
           ? DateTime.parse(json['endDate'] as String)
           : null,
@@ -344,6 +377,9 @@ class Habit {
               ?.map((e) => Reminder.fromJson(e as Map<String, dynamic>))
               .toList() ??
           const [],
+      whyPhrase: json['whyPhrase'] as String?,
+      whyGoal: json['whyGoal'] as String?,
+      whyImagePath: json['whyImagePath'] as String?,
       isCompleted: json['isCompleted'] as bool? ?? false,
       points: json['points'] as int? ?? 0,
     );

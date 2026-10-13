@@ -11,6 +11,7 @@ import 'package:sunhabit/core/services/notification_service.dart';
 import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
 import 'package:sunhabit/core/theme/app_decorations.dart';
+import 'package:sunhabit/features/onboarding/presentation/onboarding_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -454,6 +455,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+              Text('Ayuda', style: textTheme.titleMedium),
+              const SizedBox(height: 12),
+
+              // Tarjeta para volver a ver el tutorial
+              Container(
+                decoration: AppDecorations.card,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(AppConstants.cardRadius),
+                    onTap: OnboardingScreen.launch,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 16,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.neonGreen.withValues(alpha: 0.12),
+                              border: Border.all(
+                                color: AppColors.neonGreen.withValues(alpha: 0.3),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.school_outlined,
+                              color: AppColors.neonGreen,
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Ver tutorial',
+                                  style: textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Repasa cómo crear hábitos y registrar tu progreso',
+                                  style: textTheme.bodyMedium?.copyWith(
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            color: AppColors.textSecondary,
+                            size: 28,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],

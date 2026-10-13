@@ -117,6 +117,24 @@ class BackupService {
       throw BackupException('El backup está incompleto.');
     }
 
+    // Validar que el JSON interno de cada clave sea una lista decodable
+    // ANTES de escribir en storage: si se importara un payload corrupto,
+    // `_load` no podría parsearlo y reemplazaría los datos reales con
+    // los hábitos de ejemplo.
+    for (final entry in {
+      'hábitos': habits,
+      'categorías': categories,
+      'logs': logs,
+    }.entries) {
+      try {
+        if (jsonDecode(entry.value) is! List) {
+          throw const FormatException('expected a JSON list');
+        }
+      } catch (_) {
+        throw BackupException('El backup tiene los ${entry.key} corruptos.');
+      }
+    }
+
     return _BackupPayload(habits, categories, logs);
   }
 
