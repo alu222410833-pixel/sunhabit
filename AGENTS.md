@@ -2025,3 +2025,51 @@ pasaba nada hasta reabrir.
   ya no existe. Y solo debe haber **un camino de cierre** del timer
   (`finishTimer`), no uno por punto de entrada.
 
+
+---
+
+## Motor nativo de recordatorios en Kotlin (2026-11-09)
+
+### Motivo
+En el Honor JDY-LX3 (MagicUI) los recordatorios seguían fallando: al sonar,
+`alarm` y `flutter_local_notifications` tienen que arrancar el motor de
+Flutter en segundo plano, y la reprogramación (semanal, tras reinicio o
+cambio de hora) dependía de que el usuario abriera la app. Se pasó toda la
+"inteligencia" de recordatorios de hábitos a Kotlin; Flutter se queda con la
+interfaz. **Ojo:** esto NO evita que MagicUI haga "forzar detención" (que
+borra todas las alarmas de la app); para eso el usuario debe activar el
+inicio automático (botón "Abrir ajustes" en la guía por marca de Ajustes).
+
+### Arquitectura
+- Dart (`ReminderService`) convierte cada `Reminder` en un *spec* JSON y
+  envía la lista COMPLETA por el MethodChannel `sunhabit/native_reminders`
+  (`NativeReminderService.sync`). Ya no lleva IDs ni cancela a mano.
+  - Frecuencias semanales (`Todos los días`, `Días exactos de la semana`):
+    máscara `weekdays` (bit 0 = lunes) + `startEpochDay`/`endEpochDay`.
+  - Resto de frecuencias: `dates` con las próximas 60 fechas (epoch day,
+    escaneo de 400 días). Se refrescan en cada `scheduleAllHabits()`.
+- Kotlin (`android/app/src/main/kotlin/com/example/sunhabit/reminders/`):
+  - `ReminderStore`: specs y cola de acciones en SharedPreferences nativo
+    (`sunhabit_native_reminders`), con `commit()`.
+  - `ReminderScheduler`: una sola alarma pendiente por spec con
+    `AlarmManager.setAlarmClock()` (fallback `setAndAllowWhileIdle` sin
+    permiso de exactas). Al sonar, reprograma todo.
+  - `ReminderReceiver` (disparo), `ReminderBootReceiver` (boot, update,
+    cambio de hora/zona, permiso de exactas), `ReminderActionReceiver`
+    (Sí/No/Posponer/Detener).
+  - `ReminderNotifications`: canales `sunhabit_native_reminders` y
+    `sunhabit_native_alarm`, icono circular, acciones por tipo.
+  - `AlarmRingService` (foreground, `USAGE_ALARM`, fade-in, vibración,
+    wakelock, máx. 10 min) + `AlarmActivity` (pantalla sobre el bloqueo).
+  - `NativeRemindersChannel`: si la app está abierta avisa a Dart; si no,
+    arranca un motor headless en `nativeActionMain` (`main.dart`) para
+    aplicar Sí/No con `HabitsRepository`. Las acciones de días anteriores se
+    descartan.
+- Migración: la primera sincronización (`native_reminders_v1`) borra las
+  alarmas de hábitos del paquete `alarm` y las notificaciones de
+  `flutter_local_notifications`. `alarm` sigue solo para utilidades.
+
+### Notas de tests
+`ReminderService` es singleton: no guardar Futures entre llamadas (p. ej.
+una cadena de serialización), porque en `testWidgets` cada test tiene su
+propia zona FakeAsync y un Future de un test anterior nunca completa.

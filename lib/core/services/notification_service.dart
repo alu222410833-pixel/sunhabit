@@ -11,11 +11,10 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/habit_execution_service.dart';
-import 'package:sunhabit/core/utils/stable_hash.dart';
+import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
 import 'package:sunhabit/features/habits/presentation/habit_completion_bottom_sheet/habit_completion_bottom_sheet.dart';
-import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
 
 /// Maneja las acciones de notificación cuando la app está terminada o en background.
 ///
@@ -194,90 +193,6 @@ class NotificationService {
     }
   }
 
-  /// Programa una notificación local para una fecha y hora concretas.
-  ///
-  /// Usa `AndroidScheduleMode.alarmClock` (que internamente utiliza
-  /// `AlarmManager.setAlarmClock`) para que el recordatorio sea preciso y no
-  /// sea bloqueado por la optimización de batería de Huawei/Honor/Xiaomi.
-  /// Si `alarmClock` falla, intenta `exactAllowWhileIdle` y finalmente
-  /// `inexactAllowWhileIdle` como fallback.
-  static Future<void> schedule({
-    required int id,
-    required DateTime at,
-    required Habit habit,
-  }) async {
-    final scheduled = tz.TZDateTime(
-      tz.local,
-      at.year,
-      at.month,
-      at.day,
-      at.hour,
-      at.minute,
-    );
-
-    if (scheduled.isBefore(tz.TZDateTime.now(tz.local))) {
-      debugPrint('[NotificationService] skipping id=$id at=$at (already passed in local tz)');
-      return;
-    }
-
-    final actions = _buildActionsForHabit(habit);
-    final body = _buildBodyForHabit(habit, at);
-
-    final imagePath = habit.effectiveImagePath;
-    final largeIcon = (imagePath != null && File(imagePath).existsSync())
-        ? FilePathAndroidBitmap(imagePath)
-        : null;
-
-    final details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        _channelId,
-        _channelName,
-        channelDescription: _channelDescription,
-        importance: Importance.max,
-        priority: Priority.max,
-        category: AndroidNotificationCategory.reminder,
-        autoCancel: true,
-        ongoing: false,
-        enableLights: true,
-        showWhen: true,
-        largeIcon: largeIcon,
-        actions: actions,
-      ),
-      iOS: const DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      ),
-    );
-
-    // Intentar alarmClock (setAlarmClock) para mayor fiabilidad en
-    // Huawei/Honor/Xiaomi; si falla, probar exactos e inexactos.
-    for (final mode in [
-      AndroidScheduleMode.alarmClock,
-      AndroidScheduleMode.exactAllowWhileIdle,
-      AndroidScheduleMode.inexactAllowWhileIdle,
-    ]) {
-      try {
-        await _plugin.zonedSchedule(
-          id: id,
-          title: 'Recordatorio',
-          body: body,
-          payload: habit.id,
-          scheduledDate: scheduled,
-          notificationDetails: details,
-          androidScheduleMode: mode,
-        );
-        debugPrint('[NotificationService] scheduled id=$id at=$at mode=$mode');
-        return; // Éxito, salir del bucle.
-      } on Exception catch (e) {
-        debugPrint('[NotificationService] mode=$mode failed: $e');
-        // Si es el último intento, re-lanzar.
-        if (mode == AndroidScheduleMode.inexactAllowWhileIdle) rethrow;
-        // Si no, probar el siguiente modo.
-      }
-    }
-  }
-
   /// Cancela una notificación programada por su ID.
   static Future<void> cancel(int id) async {
     await _plugin.cancel(id: id);
@@ -293,22 +208,9 @@ class NotificationService {
     return await _plugin.pendingNotificationRequests();
   }
 
-  /// Pospone el recordatorio de un hábito por el número de minutos indicado.
-  ///
-  /// Programa la notificación pospuesta con [schedule], de forma que conserve
-  /// las acciones rápidas y use `setAlarmClock()` para evitar el bloqueo por
-  /// la optimización de batería de Huawei/Honor/Xiaomi.
-  static Future<void> snoozeHabit(String habitId, int minutes) async {
-    final habit = HabitsRepository().getHabitById(habitId);
-    if (habit == null) return;
-
-    final at = DateTime.now().add(Duration(minutes: minutes));
-    // ID fijo por hábito: un snooze nuevo reemplaza al anterior (solo
-    // el último pospuesto queda pendiente) y se puede cancelar de
-    // forma determinista.
-    final snoozeId = stableHash('${habit.id}_snooze') & 0x7FFFFFFF;
-    await schedule(id: snoozeId, at: at, habit: habit);
-  }
+  /// Pospone el recordatorio de un hábito (lo programa el motor nativo).
+  static Future<void> snoozeHabit(String habitId, int minutes) =>
+      ReminderService.instance.snoozeHabit(habitId, minutes);
 
   // ---- Notificación persistente del temporizador ----
 
@@ -448,8 +350,7 @@ class NotificationService {
         feedbackMessage = '⏰ "${habit.title}" pospuesto 10 min';
         break;
       case 'action_timer_start':
-        HabitExecutionService().startTimer(habit);
-        _openAlarmScreen(habit);
+        startTimerFromReminder(habit);
         return;
       case 'action_view_checklist':
       case 'action_open':
@@ -457,7 +358,7 @@ class NotificationService {
         // Las notificaciones abren la pantalla de ejecución del hábito,
         // no la pantalla de alarma. La pantalla de alarma solo se abre
         // cuando una alarma real está sonando.
-        _openHabitExecutionScreen(habit);
+        openHabitExecutionScreen(habit);
         return;
     }
 
@@ -488,6 +389,12 @@ class NotificationService {
     }
   }
 
+  /// Inicia el temporizador del hábito y abre su pantalla de ejecución.
+  static void startTimerFromReminder(Habit habit) {
+    HabitExecutionService().startTimer(habit);
+    _openAlarmScreen(habit);
+  }
+
   static void _openAlarmScreen(Habit habit) {
     final fakeSettings = AlarmService.instance.buildFakeAlarmSettings(habit);
     AppRouter.router.push(AppRouter.alarm, extra: fakeSettings);
@@ -496,7 +403,7 @@ class NotificationService {
   /// Abre la pantalla de registro del hábito (cantidad, checklist,
   /// temporizador, sí/no) — el mismo sheet que se abre al tocar el
   /// hábito en Inicio.
-  static void _openHabitExecutionScreen(Habit habit) {
+  static void openHabitExecutionScreen(Habit habit) {
     AppRouter.router.go('/');
     // La navegación necesita un frame para montar el Navigator; si el
     // contexto aún no existe (arranque en frío) se reintenta una vez.
@@ -552,101 +459,6 @@ class NotificationService {
   }
 
   // ---- Helpers ----
-
-  static String _formatTime(DateTime at) =>
-      '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
-
-  static List<AndroidNotificationAction> _buildActionsForHabit(Habit habit) {
-    switch (habit.evaluationType) {
-      case HabitEvaluationType.timer:
-        return const [
-          AndroidNotificationAction(
-            'action_timer_start',
-            '▶ Iniciar',
-            showsUserInterface: true,
-            cancelNotification: true,
-          ),
-          AndroidNotificationAction(
-            'action_snooze_10',
-            '⏰ Posponer 10m',
-            showsUserInterface: false,
-            cancelNotification: true,
-          ),
-        ];
-      case HabitEvaluationType.yesNo:
-        return const [
-          AndroidNotificationAction(
-            'action_yes',
-            '✓ Sí',
-            showsUserInterface: false,
-            cancelNotification: true,
-          ),
-          AndroidNotificationAction(
-            'action_no',
-            '✕ No',
-            showsUserInterface: false,
-            cancelNotification: true,
-          ),
-          AndroidNotificationAction(
-            'action_snooze_10',
-            '⏰ Posponer 10m',
-            showsUserInterface: false,
-            cancelNotification: true,
-          ),
-        ];
-      case HabitEvaluationType.checklist:
-        return const [
-          AndroidNotificationAction(
-            'action_view_checklist',
-            '📋 Ver lista',
-            showsUserInterface: true,
-            cancelNotification: true,
-          ),
-          AndroidNotificationAction(
-            'action_snooze_10',
-            '⏰ Posponer 10m',
-            showsUserInterface: false,
-            cancelNotification: true,
-          ),
-        ];
-      case HabitEvaluationType.amount:
-        // Solo acciones de navegación: registrar cantidades desde la
-        // notificación se eliminó ('+1'/'Escribir' eran poco prácticos).
-        // 'Abrir' lleva a la pantalla de ejecución del hábito.
-        // Los handlers action_add_amount/action_input_amount se mantienen
-        // para notificaciones programadas antes de este cambio.
-        return const [
-          AndroidNotificationAction(
-            'action_open',
-            '📝 Abrir',
-            showsUserInterface: true,
-            cancelNotification: true,
-          ),
-          AndroidNotificationAction(
-            'action_snooze_10',
-            '⏰ Posponer 10m',
-            showsUserInterface: false,
-            cancelNotification: true,
-          ),
-        ];
-    }
-  }
-
-  static String _buildBodyForHabit(Habit habit, DateTime at) {
-    final time = _formatTime(at);
-    switch (habit.evaluationType) {
-      case HabitEvaluationType.timer:
-        final min = habit.estimatedDuration?.inMinutes ?? 0;
-        return '${habit.title} — $time ($min min objetivo)';
-      case HabitEvaluationType.yesNo:
-        return '¿${habit.title}? — $time';
-      case HabitEvaluationType.checklist:
-        final total = habit.checklist?.length ?? 0;
-        return '${habit.title} — $time ($total tareas)';
-      case HabitEvaluationType.amount:
-        return '${habit.title} — $time (${habit.current ?? 0}/${habit.target ?? 0} ${habit.unit ?? ""})';
-    }
-  }
 
   /// Muestra inmediatamente una notificación local de prueba.
   ///

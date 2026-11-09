@@ -1,12 +1,12 @@
 import 'dart:io';
 
-import 'package:alarm/alarm.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sunhabit/core/constants/app_constants.dart';
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
+import 'package:sunhabit/core/services/native_reminder_service.dart';
 import 'package:sunhabit/core/services/notification_service.dart';
 import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/theme/app_colors.dart';
@@ -48,8 +48,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _refreshSystemAlarmCount() async {
     if (!Platform.isAndroid) return;
     try {
-      final alarms = await Alarm.getAlarms();
-      if (mounted) setState(() => _systemAlarmCount = alarms.length);
+      final count = await NativeReminderService.scheduledCount();
+      if (mounted) setState(() => _systemAlarmCount = count);
     } catch (_) {
       // Si falla la consulta, simplemente no mostramos el contador.
     }
@@ -156,6 +156,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              NativeReminderService.openAutoStartSettings();
+            },
+            child: const Text(
+              'Abrir ajustes',
+              style: TextStyle(color: AppColors.neonGreen),
+            ),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text(

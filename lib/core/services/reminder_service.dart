@@ -1,45 +1,47 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:alarm/alarm.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/habit_execution_service.dart';
+import 'package:sunhabit/core/services/native_reminder_service.dart';
 import 'package:sunhabit/core/services/notification_service.dart';
 import 'package:sunhabit/core/utils/stable_hash.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
 import 'package:sunhabit/features/habits/data/habits_repository.dart';
+import 'package:sunhabit/features/habits/presentation/widgets/habit_visuals.dart';
 
-/// Servicio coordinador que programa y cancela los recordatorios de hábitos.
+/// Coordinador de los recordatorios de hábitos.
 ///
-/// Cada [Reminder] de un hábito puede ser de tipo 'Notificación' o 'Alarma'.
-/// Este servicio decide a qué servicio delegar según el tipo:
-/// - **'Notificación'** → [NotificationService] (barra de notificaciones con
-///   acciones interactivas).
-/// - **'Alarma'** → [AlarmService] (sonido + vibración + pantalla completa).
+/// Traduce los [Reminder] de cada hábito a "specs" y se los envía al motor
+/// nativo de Android ([NativeReminderService]), que programa cada uno con
+/// `AlarmManager.setAlarmClock()` y calcula por sí mismo la siguiente
+/// ocurrencia cada vez que suena, tras un reinicio o un cambio de hora.
 ///
-/// También se encarga de re-programar todos los recordatorios al arrancar la
-/// app o al volver de background, ya que las notificaciones entregadas no se
-/// re-agendan solas.
+/// Cada sincronización envía la lista COMPLETA de recordatorios: el lado
+/// nativo cancela lo que ya no existe, así que no hace falta llevar IDs ni
+/// cancelar programaciones manualmente.
 class ReminderService {
   ReminderService._internal();
   static final ReminderService instance = ReminderService._internal();
 
   static const int scheduleRangeDays = 14;
 
-  /// Cuántos días hacia adelante se escanea buscando la próxima
-  /// ocurrencia fuera de la ventana rodante, para recordatorios de
-  /// ciclo largo (anual, mensual o intervalos > [scheduleRangeDays]).
-  /// Sin esto, un recordatorio que cae más allá de 14 días nunca se
-  /// programaba si el usuario no abría la app a tiempo.
+  /// Cuántos días hacia adelante se buscan ocurrencias para frecuencias
+  /// que no son semanales (mensual, anual, "Repetir"...).
   static const int longRangeScanDays = 400;
+
+  /// Máximo de fechas explícitas enviadas por recordatorio no semanal.
+  static const int maxExplicitDates = 60;
+
+  /// Limpieza única de programaciones antiguas, compartida por todas las
+  /// sincronizaciones para que se envíen a nativo en orden.
+  Future<void>? _legacyMigration;
 
   /// Clave estable que identifica el CONTENIDO de un recordatorio,
   /// independiente de su posición en `habit.reminders`.
-  ///
-  /// Antes los IDs derivaban del índice en la lista: borrar o reordenar
-  /// recordatorios cambiaba la identidad de los demás y podía dejar
-  /// programaciones huérfanas si alguna ruta olvidaba cancelar con el
-  /// estado anterior. Dos recordatorios con contenido idéntico
-  /// comparten ID — son duplicados funcionales de todos modos.
   String _reminderKey(Reminder reminder) {
     final days =
         reminder.weekDays?.map((b) => b ? '1' : '0').join() ?? '';
@@ -48,12 +50,7 @@ class ReminderService {
         '_${reminder.audioDurationSeconds ?? ''}_$days';
   }
 
-  /// Genera un ID único y estable para un recordatorio de un hábito en una
-  /// fecha concreta. Se usa tanto para notificaciones como para alarmas.
-  ///
-  /// Usa [stableHash] (FNV-1a) en lugar de `String.hashCode`, que no es
-  /// estable entre ejecuciones de la app y dejaba programaciones
-  /// imposibles de cancelar (alarmas fantasma/duplicadas).
+  /// ID estable de un recordatorio en una fecha concreta.
   int idFor(Habit habit, Reminder reminder, DateTime date) {
     final raw = '${habit.id}_${_reminderKey(reminder)}'
         '_${date.year}${date.month.toString().padLeft(2, '0')}'
@@ -61,18 +58,12 @@ class ReminderService {
     return stableHash(raw) & 0x7FFFFFFF;
   }
 
-  /// Genera un ID único y estable para una alarma semanal de un hábito.
-  ///
-  /// Se usa cuando la frecuencia del hábito permite alarmas que se repiten
-  /// cada 7 días (una por día de la semana activo). El `_w` distingue el ID
-  /// semanal del ID diario generado por [idFor].
+  /// ID estable de un recordatorio semanal para un día de la semana.
   int idForWeekday(Habit habit, Reminder reminder, int weekday) {
     final raw = '${habit.id}_${_reminderKey(reminder)}_w$weekday';
     return stableHash(raw) & 0x7FFFFFFF;
   }
 
-  /// Indica si un recordatorio con `weekDays` aplica en [date].
-  /// Sin `weekDays` (o lista vacía) aplica a cualquier día programado.
   bool _reminderAppliesOnDate(Reminder reminder, DateTime date) {
     final days = reminder.weekDays;
     if (days == null || days.isEmpty) return true;
@@ -80,403 +71,243 @@ class ReminderService {
     return index >= 0 && index < days.length && days[index];
   }
 
-  /// Primera fecha programable DESPUÉS de la ventana rodante
-  /// ([scheduleRangeDays] días), escaneando hasta [longRangeScanDays].
-  ///
-  /// Red de seguridad para recordatorios de ciclo largo: aunque el
-  /// usuario no abra la app dentro de la ventana, la próxima ocurrencia
-  /// lejana queda programada en el sistema. Devuelve `null` si el
-  /// hábito no tiene más ocurrencias (p. ej. `endDate` alcanzada).
-  DateTime? _nextFarOccurrence(
-      Habit habit, Reminder reminder, DateTime now) {
-    final end = habit.endDate;
-    final endDay =
-        end == null ? null : DateTime(end.year, end.month, end.day);
-    for (int d = scheduleRangeDays; d <= longRangeScanDays; d++) {
-      final date = now.add(Duration(days: d));
-      if (endDay != null && date.isAfter(endDay)) break;
-      if (!habit.isScheduledFor(date)) continue;
-      if (!_reminderAppliesOnDate(reminder, date)) continue;
-      return date;
-    }
-    return null;
-  }
-
-  /// Devuelve `true` si la frecuencia del hábito es compatible con alarmas
-  /// semanales repetidas (una alarma por día de la semana activo que se
-  /// auto-reprograma cada 7 días cuando suena).
-  ///
-  /// Las alarmas semanales solo funcionan cuando `isScheduledFor` depende
-  /// exclusivamente del día de la semana, porque el `AlarmManager` repite
-  /// cada 7 días sin conocer la lógica de frecuencia de la app.
-  ///
-  /// Para frecuencias más complejas (días del mes, repetir cada X días,
-  /// fechas del año) se usa la ventana rodante de [scheduleRangeDays].
+  /// `true` si `isScheduledFor` depende solo del día de la semana, de modo
+  /// que el motor nativo puede repetir el recordatorio indefinidamente con
+  /// una máscara semanal.
   bool supportsWeeklyAlarms(Habit habit) {
     return habit.frequency == null ||
         habit.frequency == 'Todos los días' ||
         habit.frequency == 'Días exactos de la semana';
   }
 
-  /// Devuelve la próxima fecha/hora para el día de la semana indicado
-  /// (0=Lunes, 6=Domingo) a la hora `reminder.hour`:`reminder.minute`.
-  ///
-  /// Si hoy es ese día pero la hora ya pasó, devuelve el mismo día de la
-  /// próxima semana.
-  DateTime _nextDateWithWeekday(
-      DateTime now, int weekday, Reminder reminder) {
+  static int _epochDay(DateTime d) =>
+      DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch ~/
+      Duration.millisecondsPerDay;
+
+  static String _time(Reminder r) =>
+      '${r.hour.toString().padLeft(2, '0')}:${r.minute.toString().padLeft(2, '0')}';
+
+  /// Máscara semanal (bit 0 = lunes) donde aplican hábito y recordatorio.
+  int _weekdayMask(Habit habit, Reminder reminder) {
+    var mask = 0;
+    final monday = DateTime(2024, 1, 1); // lunes
+    for (var i = 0; i < 7; i++) {
+      final day = DateTime(monday.year, monday.month, monday.day + i);
+      final habitOk = habit.frequency != 'Días exactos de la semana' ||
+          ((habit.weekDays?.length ?? 0) > i && habit.weekDays![i]);
+      if (habitOk && _reminderAppliesOnDate(reminder, day)) mask |= 1 << i;
+    }
+    return mask;
+  }
+
+  /// Próximas fechas (epoch day) en que aplica un recordatorio no semanal.
+  List<int> _explicitDates(Habit habit, Reminder reminder, DateTime now) {
+    final dates = <int>[];
     final today = DateTime(now.year, now.month, now.day);
-    var candidate = today;
-
-    // Avanzar hasta el próximo día de la semana objetivo.
-    while (candidate.weekday - 1 != weekday) {
-      candidate = candidate.add(const Duration(days: 1));
+    for (var d = 0; d <= longRangeScanDays; d++) {
+      final date = DateTime(today.year, today.month, today.day + d);
+      if (!habit.isScheduledFor(date)) continue;
+      if (!_reminderAppliesOnDate(reminder, date)) continue;
+      dates.add(_epochDay(date));
+      if (dates.length >= maxExplicitDates) break;
     }
-
-    var at = DateTime(
-      candidate.year,
-      candidate.month,
-      candidate.day,
-      reminder.hour,
-      reminder.minute,
-    );
-
-    // Si hoy coincide pero la hora ya pasó, ir a la próxima semana.
-    if (candidate.isAtSameMomentAs(today) && at.isBefore(now)) {
-      candidate = candidate.add(const Duration(days: 7));
-      at = DateTime(
-        candidate.year,
-        candidate.month,
-        candidate.day,
-        reminder.hour,
-        reminder.minute,
-      );
-    }
-
-    return at;
+    return dates;
   }
 
-  /// Programa todos los recordatorios de un hábito.
-  ///
-  /// Para hábitos con frecuencia `'Todos los días'` o `'Días exactos de la
-  /// semana'` crea una alarma semanal por cada día activo (`weekday` 0-6).
-  /// Cada alarma se auto-reprograma cada 7 días cuando suena (ver
-  /// `SunHabitApp._onRingingChanged`).
-  ///
-  /// Para hábitos con otras frecuencias (`'Días específicos del mes'`,
-  /// `'Repetir'`, `'Días específicos del año'`) usa la ventana rodante de
-  /// [scheduleRangeDays] días.
-  Future<void> scheduleHabit(Habit habit) async {
-    debugPrint('[ReminderService] scheduleHabit "${habit.title}" reminders=${habit.reminders.length}');
-    await cancelHabit(habit);
-    final now = DateTime.now();
-    final useWeekly = supportsWeeklyAlarms(habit);
+  String _bodyFor(Habit habit, Reminder reminder) {
+    final time = _time(reminder);
+    if (reminder.type == 'Alarma') {
+      return 'Tu hábito te está esperando · $time';
+    }
+    switch (habit.evaluationType) {
+      case HabitEvaluationType.timer:
+        final min = habit.estimatedDuration?.inMinutes ?? 0;
+        return min > 0 ? 'Objetivo: $min min · $time' : 'Hora de empezar · $time';
+      case HabitEvaluationType.yesNo:
+        return '¿Ya lo hiciste? · $time';
+      case HabitEvaluationType.checklist:
+        final total = habit.checklist?.length ?? 0;
+        return '$total tareas · $time';
+      case HabitEvaluationType.amount:
+        final target = habit.target;
+        return target != null
+            ? 'Meta: $target ${habit.unit ?? ''} · $time'.replaceAll('  ', ' ')
+            : 'Registra tu avance · $time';
+    }
+  }
 
-    for (int i = 0; i < habit.reminders.length; i++) {
-      final reminder = habit.reminders[i];
-      debugPrint('[ReminderService] reminder[$i] type=${reminder.type} ${reminder.hour}:${reminder.minute}');
+  String? _existingImage(Habit habit) {
+    try {
+      final path = habit.effectiveImagePath;
+      if (path != null && File(path).existsSync()) return path;
+    } catch (_) {
+      // Repositorio no inicializado (tests).
+    }
+    return null;
+  }
 
-      if (useWeekly) {
-        for (int weekday = 0; weekday < 7; weekday++) {
-          if (reminder.weekDays != null &&
-              reminder.weekDays!.isNotEmpty &&
-              !reminder.weekDays![weekday]) {
-            continue;
-          }
+  Map<String, dynamic> _baseSpec(Habit habit, Reminder reminder) {
+    final isAlarm = reminder.type == 'Alarma';
+    String? sound;
+    if (isAlarm) {
+      try {
+        sound = HabitsRepository().getEffectiveSound(habit, reminder);
+      } catch (_) {
+        sound = null;
+      }
+    }
+    final why = habit.whyPhrase;
+    return {
+      'key': '${habit.id}_${_reminderKey(reminder)}',
+      'habitId': habit.id,
+      'habitTitle': habit.title,
+      'kind': isAlarm ? 'alarm' : 'notification',
+      'evaluationType': habit.evaluationType.name,
+      'hour': reminder.hour,
+      'minute': reminder.minute,
+      'title': isAlarm ? '¡Es hora de ${habit.title}!' : habit.title,
+      'body': _bodyFor(habit, reminder),
+      'soundPath': ?sound,
+      'imagePath': ?_existingImage(habit),
+      if (why != null && why.isNotEmpty) 'whyPhrase': why,
+    };
+  }
 
-          final at = _nextDateWithWeekday(now, weekday, reminder);
-          if (!habit.isScheduledFor(at)) continue;
-
-          final id = idForWeekday(habit, reminder, weekday);
-          debugPrint('[ReminderService] scheduling weekly id=$id weekday=$weekday at=$at');
-          await _scheduleOne(
-              id: id,
-              at: at,
-              reminder: reminder,
-              habit: habit,
-              reminderIndex: i);
+  /// Specs nativos de todos los recordatorios de [habit].
+  @visibleForTesting
+  List<Map<String, dynamic>> buildSpecs(Habit habit, {DateTime? now}) {
+    final at = now ?? DateTime.now();
+    final specs = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final reminder in habit.reminders) {
+      final spec = _baseSpec(habit, reminder);
+      if (!seen.add(spec['key'] as String)) continue;
+      if (supportsWeeklyAlarms(habit)) {
+        final mask = _weekdayMask(habit, reminder);
+        if (mask == 0) continue;
+        spec['weekdays'] = mask;
+        if (habit.startDate != null) {
+          spec['startEpochDay'] = _epochDay(habit.startDate!);
+        }
+        if (habit.endDate != null) {
+          spec['endEpochDay'] = _epochDay(habit.endDate!);
         }
       } else {
-        for (int d = 0; d < scheduleRangeDays; d++) {
-          final date = now.add(Duration(days: d));
-          if (!habit.isScheduledFor(date)) continue;
-          if (!_reminderAppliesOnDate(reminder, date)) continue;
+        final dates = _explicitDates(habit, reminder, at);
+        if (dates.isEmpty) continue;
+        spec['dates'] = dates;
+      }
+      specs.add(spec);
+    }
+    return specs;
+  }
 
-          final at = DateTime(
-            date.year,
-            date.month,
-            date.day,
-            reminder.hour,
-            reminder.minute,
-          );
-          if (at.isBefore(now)) {
-            debugPrint('[ReminderService] skipping $at (already passed)');
-            continue;
-          }
+  /// Envía a nativo los recordatorios de [habits] (lista completa).
+  Future<int> _sync(List<Habit> habits, {bool keepSnoozes = true}) async {
+    final specs = [for (final h in habits) ...buildSpecs(h)];
+    if (!NativeReminderService.isSupported) return specs.length;
+    await (_legacyMigration ??= _migrateLegacyScheduling());
+    try {
+      final count =
+          await NativeReminderService.sync(specs, keepSnoozes: keepSnoozes);
+      debugPrint('[ReminderService] synced ${specs.length} specs, '
+          '$count scheduled');
+      return count;
+    } on PlatformException catch (e) {
+      debugPrint('[ReminderService] native sync failed: $e');
+      return 0;
+    }
+  }
 
-          final id = idFor(habit, reminder, date);
-          debugPrint('[ReminderService] scheduling id=$id at=$at');
-          await _scheduleOne(
-              id: id,
-              at: at,
-              reminder: reminder,
-              habit: habit,
-              reminderIndex: i);
-        }
+  List<Habit> _habitsWith(Habit habit) => [
+        for (final h in HabitsRepository().getHabits())
+          if (h.id != habit.id) h,
+        habit,
+      ];
 
-        // Red de seguridad para ciclos largos: programar también la
-        // primera ocurrencia más allá de la ventana (anual, mensual o
-        // intervalos > scheduleRangeDays), para que suene aunque la
-        // app no se abra a tiempo.
-        final far = _nextFarOccurrence(habit, reminder, now);
-        if (far != null) {
-          final at = DateTime(far.year, far.month, far.day,
-              reminder.hour, reminder.minute);
-          if (!at.isBefore(now)) {
-            final id = idFor(habit, reminder, far);
-            debugPrint('[ReminderService] scheduling far id=$id at=$at');
-            await _scheduleOne(
-                id: id,
-                at: at,
-                reminder: reminder,
-                habit: habit,
-                reminderIndex: i);
-          }
-        }
+  /// Programa (o reprograma) los recordatorios de [habit].
+  ///
+  /// [habit] reemplaza a la versión guardada en el repositorio, por si el
+  /// llamador aún no la persistió.
+  Future<void> scheduleHabit(Habit habit) => _sync(_habitsWith(habit));
+
+  /// Re-sincroniza los recordatorios de TODOS los hábitos.
+  ///
+  /// Devuelve cuántos recordatorios quedaron programados en el sistema.
+  Future<int> scheduleAllHabits() => _sync(HabitsRepository().getHabits());
+
+  /// Igual que [scheduleAllHabits] pero descarta también los recordatorios
+  /// pospuestos. Se usa tras importar un backup.
+  Future<int> rescheduleAllFromScratch() =>
+      _sync(HabitsRepository().getHabits(), keepSnoozes: false);
+
+  /// Quita los recordatorios de [habit] (p. ej. al eliminarlo).
+  Future<void> cancelHabit(Habit habit) => _sync([
+        for (final h in HabitsRepository().getHabits())
+          if (h.id != habit.id) h,
+      ]);
+
+  /// Pospone el recordatorio de [habitId] [minutes] minutos (en nativo).
+  Future<void> snoozeHabit(String habitId, int minutes) async {
+    final habit = HabitsRepository().getHabitById(habitId);
+    if (habit == null) return;
+    final reminder = habit.reminders.isNotEmpty
+        ? habit.reminders.first
+        : Reminder(
+            hour: DateTime.now().hour, minute: DateTime.now().minute);
+    final spec = _baseSpec(habit, reminder)
+      ..['kind'] = 'notification'
+      ..['title'] = habit.title
+      ..['body'] = 'Recordatorio pospuesto ${minutes}min';
+    await NativeReminderService.snooze(spec, minutes);
+  }
+
+  /// Aplica las acciones Sí/No pulsadas en notificaciones o en la
+  /// pantalla de alarma nativa. Las de días anteriores se descartan.
+  Future<void> applyPendingActions() async {
+    final actions = await NativeReminderService.takePendingActions();
+    final today = _epochDay(DateTime.now());
+    for (final action in actions) {
+      if (action['epochDay'] != today) continue;
+      final habitId = action['habitId'] as String?;
+      if (habitId == null) continue;
+      switch (action['action']) {
+        case 'yes':
+          await HabitsRepository().setHabitYesNo(habitId, true);
+        case 'no':
+          await HabitsRepository().setHabitYesNo(habitId, false);
       }
     }
   }
 
-  /// Re-programa los recordatorios de TODOS los hábitos sin cancelar los
-  /// existentes.
-  ///
-  /// Se usa al arrancar la app o al volver de background. No cancela primero
-  /// para no interferir con alarmas que estén a punto de sonar o sonando.
-  ///
-  /// Para hábitos con frecuencia compatible crea/actualiza las alarmas
-  /// semanales (máx. 7 por recordatorio). Para los demás usa la ventana
-  /// rodante de [scheduleRangeDays].
-  ///
-  /// Devuelve el número de recordatorios programados con éxito.
-  Future<int> scheduleAllHabits() async {
-    await _migrateToStableIds();
-    var scheduled = 0;
-    final habits = HabitsRepository().getHabits();
-    final now = DateTime.now();
-    for (final habit in habits) {
-      if (habit.reminders.isEmpty) continue;
-      final useWeekly = supportsWeeklyAlarms(habit);
-      for (int i = 0; i < habit.reminders.length; i++) {
-        final reminder = habit.reminders[i];
+  static const _legacyCleanupKey = 'native_reminders_v1';
 
-        if (useWeekly) {
-          for (int weekday = 0; weekday < 7; weekday++) {
-            if (reminder.weekDays != null &&
-                reminder.weekDays!.isNotEmpty &&
-                !reminder.weekDays![weekday]) {
-              continue;
-            }
-
-            final at = _nextDateWithWeekday(now, weekday, reminder);
-            if (!habit.isScheduledFor(at)) continue;
-
-            final id = idForWeekday(habit, reminder, weekday);
-            if (await _scheduleOne(
-                id: id,
-                at: at,
-                reminder: reminder,
-                habit: habit,
-                reminderIndex: i)) {
-              scheduled++;
-            }
-          }
-        } else {
-          for (int d = 0; d < scheduleRangeDays; d++) {
-            final date = now.add(Duration(days: d));
-            if (!habit.isScheduledFor(date)) continue;
-            if (!_reminderAppliesOnDate(reminder, date)) continue;
-
-            final at = DateTime(
-              date.year,
-              date.month,
-              date.day,
-              reminder.hour,
-              reminder.minute,
-            );
-            if (at.isBefore(now)) continue;
-
-            final id = idFor(habit, reminder, date);
-            if (await _scheduleOne(
-                id: id,
-                at: at,
-                reminder: reminder,
-                habit: habit,
-                reminderIndex: i)) {
-              scheduled++;
-            }
-          }
-
-          // Igual que en scheduleHabit: programar la primera
-          // ocurrencia más allá de la ventana para ciclos largos.
-          final far = _nextFarOccurrence(habit, reminder, now);
-          if (far != null) {
-            final at = DateTime(far.year, far.month, far.day,
-                reminder.hour, reminder.minute);
-            if (!at.isBefore(now)) {
-              if (await _scheduleOne(
-                  id: idFor(habit, reminder, far),
-                  at: at,
-                  reminder: reminder,
-                  habit: habit,
-                  reminderIndex: i)) {
-                scheduled++;
-              }
-            }
-          }
-        }
-      }
-    }
-    return scheduled;
-  }
-
-  /// Borra TODAS las programaciones nativas (alarmas y notificaciones)
-  /// y las recrea desde cero para los hábitos actuales.
-  ///
-  /// Se usa tras operaciones destructivas como importar un backup:
-  /// [scheduleAllHabits] nunca cancela lo que ya existe, así que los
-  /// hábitos reemplazados/eliminados seguirían sonando.
-  ///
-  /// Devuelve el número de recordatorios programados con éxito.
-  Future<int> rescheduleAllFromScratch() async {
-    await Alarm.stopAll();
-    await NotificationService.cancelAll();
-    // El wipe también borra la notificación persistente del
-    // temporizador en ejecución: hay que repintarla si hay sesión.
-    HabitExecutionService().resyncActiveNotification();
-    return scheduleAllHabits();
-  }
-
-  /// Clave de SharedPreferences que marca que la limpieza de
-  /// programaciones con IDs inestables (basados en `String.hashCode`)
-  /// ya se ejecutó.
-  static const _stableIdsMigrationKey = 'stable_reminder_ids_v1';
-  bool _stableIdsMigrated = false;
-
-  /// Borra TODAS las alarmas y notificaciones programadas una sola vez.
-  ///
-  /// Los IDs antiguos usaban `String.hashCode`, inestable entre
-  /// ejecuciones: las programaciones previas no se podían cancelar y
-  /// quedaban huérfanas (o se duplicaban al reprogramar con IDs nuevos).
-  /// Tras el borrado, el propio [scheduleAllHabits] reprograma todo con
-  /// los nuevos IDs estables de [stableHash].
-  Future<void> _migrateToStableIds() async {
-    if (_stableIdsMigrated) return;
-    _stableIdsMigrated = true;
+  /// Una sola vez: borra las programaciones de hábitos hechas antes del
+  /// motor nativo (paquete `alarm` y `flutter_local_notifications`) para
+  /// que no suenen duplicadas.
+  Future<void> _migrateLegacyScheduling() async {
     final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(_stableIdsMigrationKey) ?? false) return;
-    await Alarm.stopAll();
-    await NotificationService.cancelAll();
-    // Igual que en rescheduleAllFromScratch: repintar la notificación
-    // del temporizador si había una sesión activa durante el wipe.
-    HabitExecutionService().resyncActiveNotification();
-    await prefs.setBool(_stableIdsMigrationKey, true);
-    debugPrint('[ReminderService] migración a IDs estables ejecutada');
-  }
-
-  /// Cancela todos los recordatorios futuros de un hábito.
-  ///
-  /// Cancela tanto en [AlarmService] como en [NotificationService] para
-  /// eliminar posibles programaciones antiguas si el usuario cambia el tipo
-  /// de recordatorio.
-  ///
-  /// Se cancelan tanto los IDs semanales (para hábitos con frecuencia
-  /// compatible) como los IDs diarios de la ventana rodante (para hábitos
-  /// no compatibles o programaciones antiguas). Las cancelaciones de IDs
-  /// inexistentes son ignoradas.
-  Future<void> cancelHabit(Habit habit) async {
-    final now = DateTime.now();
-    for (int i = 0; i < habit.reminders.length; i++) {
-      final reminder = habit.reminders[i];
-      for (int weekday = 0; weekday < 7; weekday++) {
-        await _safeStop(idForWeekday(habit, reminder, weekday));
-        await _safeCancelNotification(
-            idForWeekday(habit, reminder, weekday));
+    if (prefs.getBool(_legacyCleanupKey) ?? false) return;
+    try {
+      for (final alarm in await Alarm.getAlarms()) {
+        if (_isLegacyHabitAlarm(alarm.payload)) await Alarm.stop(alarm.id);
       }
-      for (int d = 0; d < scheduleRangeDays; d++) {
-        final date = now.add(Duration(days: d));
-        await _safeStop(idFor(habit, reminder, date));
-        await _safeCancelNotification(idFor(habit, reminder, date));
-      }
-      // Cancelar también la ocurrencia lejana programada como red de
-      // seguridad para ciclos largos.
-      final far = _nextFarOccurrence(habit, reminder, now);
-      if (far != null) {
-        final farId = idFor(habit, reminder, far);
-        await _safeStop(farId);
-        await _safeCancelNotification(farId);
-      }
+      await NotificationService.cancelAll();
+      HabitExecutionService().resyncActiveNotification();
+      await prefs.setBool(_legacyCleanupKey, true);
+      debugPrint('[ReminderService] legacy reminders cleaned up');
+    } catch (e) {
+      _legacyMigration = null;
+      debugPrint('[ReminderService] legacy cleanup failed: $e');
     }
   }
 
-  /// Delegar al servicio correspondiente según el tipo de reminder.
-  ///
-  /// - 'Alarma' → [AlarmService] (sonido + vibración + pantalla completa).
-  /// - 'Notificación' → [NotificationService] (barra de notificaciones con
-  ///   acciones rápidas según el tipo de hábito).
-  ///
-  /// Ambos usan `AlarmManager.setAlarmClock()`, que no es bloqueado por la
-  /// optimización de batería de Huawei/Honor/Xiaomi.
-  ///
-  /// Antes de programar, cancela una posible programación antigua del servicio
-  /// opuesto para evitar notificaciones duplicadas si el usuario cambia el
-  /// tipo de recordatorio.
-  Future<bool> _scheduleOne({
-    required int id,
-    required DateTime at,
-    required Reminder reminder,
-    required Habit habit,
-    required int reminderIndex,
-  }) async {
+  bool _isLegacyHabitAlarm(String? payload) {
+    if (payload == null) return false;
     try {
-      if (reminder.type == 'Alarma') {
-        await NotificationService.cancel(id);
-        await AlarmService.instance.setHabitAlarm(
-          id: id,
-          at: at,
-          reminder: reminder,
-          habit: habit,
-          reminderIndex: reminderIndex,
-        );
-        debugPrint('[ReminderService] scheduled ALARM id=$id at=$at');
-      } else {
-        await AlarmService.instance.stop(id);
-        await NotificationService.schedule(
-          id: id,
-          at: at,
-          habit: habit,
-        );
-        debugPrint('[ReminderService] scheduled NOTIFICATION id=$id at=$at');
-      }
-      return true;
-    } on Exception catch (e) {
-      debugPrint('[ReminderService] Error scheduling id=$id: $e');
+      return (jsonDecode(payload) as Map<String, dynamic>)['habitId'] != null;
+    } catch (_) {
       return false;
-    }
-  }
-
-  Future<void> _safeStop(int id) async {
-    try {
-      await AlarmService.instance.stop(id);
-    } catch (_) {
-      // Ignorar: la alarma puede no existir.
-    }
-  }
-
-  Future<void> _safeCancelNotification(int id) async {
-    try {
-      await NotificationService.cancel(id);
-    } catch (_) {
-      // Ignorar: la notificación puede no existir.
     }
   }
 }
