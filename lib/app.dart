@@ -8,6 +8,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:sunhabit/core/navigation/app_router.dart';
 import 'package:sunhabit/core/services/alarm_service.dart';
 import 'package:sunhabit/core/services/habit_execution_service.dart';
+import 'package:sunhabit/core/services/native_reminder_service.dart';
+import 'package:sunhabit/core/services/notification_service.dart';
 import 'package:sunhabit/core/services/reminder_service.dart';
 import 'package:sunhabit/core/services/storage_service.dart';
 import 'package:sunhabit/core/theme/app_theme.dart';
@@ -25,7 +27,6 @@ class SunHabitApp extends StatefulWidget {
 
 class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
   StreamSubscription<AlarmSet>? _alarmSub;
-  AlarmSet? _previousAlarmSet;
 
   /// Timer periódico que comprueba si el día ha cambiado mientras la app
   /// está en primer plano (p. ej. si el usuario la deja abierta pasada la
@@ -43,6 +44,12 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _navigateToRingingAlarm();
     _alarmSub = AlarmService.instance.ringingStream.listen(_onRingingChanged);
+    NativeReminderService.setHandlers(
+      onPendingActions: _applyPendingReminderActions,
+      onLaunchAction: _handleReminderLaunch,
+    );
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => unawaited(_handleReminderLaunch()));
     _startDayChangeWatcher();
     _startScheduleWatcher();
     _maybeShowOnboarding();
@@ -63,6 +70,7 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
       // Al volver de background, comprobar si el día cambió mientras la app
       // estaba pausada (el Timer no se ejecuta en background).
       HabitsRepository().checkDayChange();
+      unawaited(_applyPendingReminderActions());
       // El ticker del temporizador también se suspende en background:
       // resincronizar de inmediato para que la UI no muestre un tiempo
       // congelado hasta el siguiente tick (y cerrar la sesión si la
@@ -104,47 +112,9 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
   }
 
   void _onRingingChanged(AlarmSet alarmSet) {
-    // Cuando todas las alarmas terminan, reprogramar cada una para la
-    // próxima semana (mismo día de la semana, misma hora). Esto crea una
-    // recurrencia semanal "rodante" que no depende de abrir la app.
-    //
-    // El `AlarmService` nativo mantiene el isolate vivo mientras la alarma
-    // suena, así que aunque la app estuviera cerrada, al parar la alarma
-    // se ejecuta esta reprogramación antes de que el isolate muera.
-    if (alarmSet.alarms.isEmpty &&
-        _previousAlarmSet != null &&
-        _previousAlarmSet!.alarms.isNotEmpty) {
-      for (final alarm in _previousAlarmSet!.alarms) {
-        if (_isHabitReminder(alarm)) {
-          final habitId = _extractHabitId(alarm);
-          if (habitId != null) {
-            final habit = HabitsRepository().getHabitById(habitId);
-            if (habit != null) {
-              if (ReminderService.instance.supportsWeeklyAlarms(habit)) {
-                final nextWeek =
-                    alarm.dateTime.add(const Duration(days: 7));
-                // Solo reprogramar si el hábito sigue programado para esa fecha
-                // (respeta endDate y cambios de weekDays).
-                if (habit.isScheduledFor(nextWeek)) {
-                  unawaited(Alarm.set(
-                    alarmSettings: alarm.copyWith(dateTime: nextWeek),
-                  ));
-                }
-              } else {
-                // Frecuencias no semanales (ventana rodante): re-armar
-                // +7 días no es correcto. Reprogramar el hábito completo
-                // rellena la ventana de 14 días y la próxima ocurrencia
-                // lejana (ciclos largos) aunque la app no se abra.
-                unawaited(
-                    ReminderService.instance.scheduleHabit(habit));
-              }
-            }
-          }
-        }
-      }
-    }
-    _previousAlarmSet = alarmSet;
-
+    // Los recordatorios de hábitos los programa y reprograma el motor
+    // nativo (ver NativeReminderService); el paquete `alarm` solo queda
+    // para las alarmas de utilidades.
     // Solo navegar a la pantalla de alarma para recordatorios tipo 'Alarma'.
     // Los de tipo 'Notificación' solo muestran una notificación en la barra
     // y no deben abrir la pantalla completa.
@@ -205,27 +175,21 @@ class _SunHabitAppState extends State<SunHabitApp> with WidgetsBindingObserver {
     }
   }
 
-  /// Comprueba si un [AlarmSettings] pertenece a un recordatorio de hábito
-  /// (tiene `habitId` y `reminderIndex` en el payload), a diferencia de las
-  /// alarmas de utilidad (temporizador, cuidado visual, etc.).
-  bool _isHabitReminder(AlarmSettings settings) {
-    if (settings.payload == null) return false;
-    try {
-      final data = jsonDecode(settings.payload!) as Map<String, dynamic>;
-      return data['habitId'] != null && data['reminderIndex'] != null;
-    } on Exception {
-      return false;
-    }
-  }
+  /// Aplica las acciones Sí/No pulsadas desde notificaciones nativas.
+  Future<void> _applyPendingReminderActions() =>
+      ReminderService.instance.applyPendingActions();
 
-  /// Extrae el `habitId` del payload JSON de un [AlarmSettings].
-  String? _extractHabitId(AlarmSettings settings) {
-    if (settings.payload == null) return null;
-    try {
-      final data = jsonDecode(settings.payload!) as Map<String, dynamic>;
-      return data['habitId'] as String?;
-    } on Exception {
-      return null;
+  /// Abre el hábito cuando la app se lanzó desde un botón "Abrir",
+  /// "Ver lista" o "Iniciar" de una notificación o alarma nativa.
+  Future<void> _handleReminderLaunch() async {
+    final launch = await NativeReminderService.takeLaunchAction();
+    if (launch == null) return;
+    final habit = HabitsRepository().getHabitById(launch.habitId);
+    if (habit == null) return;
+    if (launch.action == 'start_timer') {
+      NotificationService.startTimerFromReminder(habit);
+    } else {
+      NotificationService.openHabitExecutionScreen(habit);
     }
   }
 

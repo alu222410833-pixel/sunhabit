@@ -6,7 +6,6 @@ import 'package:alarm/utils/alarm_set.dart';
 
 import 'package:sunhabit/core/utils/stable_hash.dart';
 import 'package:sunhabit/features/habits/data/habit_model.dart';
-import 'package:sunhabit/features/habits/data/habits_repository.dart';
 
 /// Servicio dedicado a las alarmas nativas usando el paquete `alarm`.
 ///
@@ -47,101 +46,6 @@ class AlarmService {
   /// Detiene una alarma por su ID.
   Future<void> stop(int id) async {
     await Alarm.stop(id);
-  }
-
-  /// Programa una alarma nativa para un recordatorio de hábito.
-  ///
-  /// Usa `AlarmManager.setAlarmClock()` que NO es bloqueado por la
-  /// optimización de batería de Huawei/Honor/Xiaomi.
-  Future<void> setHabitAlarm({
-    required int id,
-    required DateTime at,
-    required Reminder reminder,
-    required Habit habit,
-    required int reminderIndex,
-  }) async {
-    final timeText =
-        '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
-    final effectiveSound =
-        HabitsRepository().getEffectiveSound(habit, reminder);
-    final payload = jsonEncode({
-      'habitId': habit.id,
-      'evaluationType': habit.evaluationType.name,
-      'reminderIndex': reminderIndex,
-      'reminderType': 'Alarma',
-    });
-
-    String stopLabel = 'Silenciar';
-    if (habit.evaluationType == HabitEvaluationType.timer) {
-      stopLabel = 'Iniciar';
-    }
-
-    await Alarm.set(
-      alarmSettings: AlarmSettings(
-        id: id,
-        dateTime: at,
-        assetAudioPath: effectiveSound,
-        loopAudio: true,
-        vibrate: true,
-        androidFullScreenIntent: true,
-        payload: payload,
-        volumeSettings: VolumeSettings.fade(
-          volume: 1.0,
-          fadeDuration: const Duration(seconds: 15),
-        ),
-        notificationSettings: NotificationSettings(
-          title: '¡Es hora de ${habit.title}!',
-          body: 'Tu hábito te está esperando · $timeText',
-          stopButton: stopLabel,
-        ),
-      ),
-    );
-  }
-
-  /// Programa una notificación usando el paquete `alarm` en modo "notificación".
-  ///
-  /// A diferencia de [setHabitAlarm], este modo:
-  /// - No reproduce audio en bucle (sin sonido o sonido corto).
-  /// - No vibra.
-  /// - No abre pantalla completa.
-  /// - Solo muestra una notificación en la barra.
-  ///
-  /// Pero usa el mismo `AlarmManager.setAlarmClock()` del sistema, que NO es
-  /// bloqueado por la optimización de batería. Esto es crucial en dispositivos
-  /// Huawei/Honor/Xiaomi que bloquean las notificaciones de
-  /// `flutter_local_notifications` pero permiten las alarmas del sistema.
-  Future<void> setHabitNotification({
-    required int id,
-    required DateTime at,
-    required Habit habit,
-    required int reminderIndex,
-  }) async {
-    final timeText =
-        '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
-    final payload = jsonEncode({
-      'habitId': habit.id,
-      'evaluationType': habit.evaluationType.name,
-      'reminderIndex': reminderIndex,
-      'reminderType': 'Notificación',
-    });
-
-    await Alarm.set(
-      alarmSettings: AlarmSettings(
-        id: id,
-        dateTime: at,
-        assetAudioPath: null,
-        loopAudio: false,
-        vibrate: false,
-        androidFullScreenIntent: false,
-        payload: payload,
-        volumeSettings: const VolumeSettings.fixed(volume: 0.0),
-        notificationSettings: NotificationSettings(
-          title: '¡Es hora de ${habit.title}!',
-          body: 'No olvides tu hábito · $timeText',
-          stopButton: 'Listo',
-        ),
-      ),
-    );
   }
 
   /// Construye un [AlarmSettings] fake para navegar a la pantalla de alarma
